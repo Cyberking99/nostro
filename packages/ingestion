@@ -1,0 +1,45 @@
+## Design Proposal: Historical Movement Re-ingestion
+
+I propose implementing historical re-ingestion as a separate operation from the existing `sync()` workflow.
+
+### 1. API
+
+Introduce:
+
+`reingest({ store, source, tenantId, account, from, to })`
+
+The function will retrieve movements within the requested historical range without advancing or modifying the normal ingestion cursor.
+
+### 2. Comparison strategy
+
+Each source movement will be compared against its recorded counterpart using the existing movement identity and revision information.
+
+Three outcomes will be supported:
+
+- Identical movements: no changes.
+- Unrecorded movements: insert as pending for normal reconciliation.
+- Different movements: create a `SOURCE_GAP_DETECTED` issue containing both the recorded and incoming versions as evidence.
+
+### 3. Idempotency
+
+Repeated execution over the same range must not create duplicate movements or duplicate source-gap issues.
+
+This will be enforced using the existing store transaction and uniqueness mechanisms, with consistent behaviour across Memory, SQLite and PostgreSQL.
+
+### 4. Cursor and concurrency
+
+Historical reads will be independent of normal cursor advancement. The implementation must not modify the sync cursor or interfere with concurrent `sync()` operations.
+
+### 5. Correction scope
+
+Applying corrections as new revisions with corresponding `correction` journal entries will be excluded from this implementation.
+
+The original movement and journal history will remain unchanged. A future correction workflow should append a new revision and a balanced correction journal entry rather than overwrite historical records.
+
+### 6. Tests and documentation
+
+Tests will cover all three comparison outcomes, repeated execution, cursor preservation, concurrent sync behaviour and all three stores.
+
+ADR 0005 and CLI help will be updated to reflect the implemented behaviour.
+
+I will first verify the existing source, movement and store interfaces before finalising implementation details.
