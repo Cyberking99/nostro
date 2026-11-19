@@ -29,6 +29,7 @@ import type {
   JournalEntry,
   JournalPeriod,
   JournalQuery,
+  Memo,
   MigratableStore,
   Movement,
   MovementConflict,
@@ -64,6 +65,7 @@ import {
   checkResolution,
   exceptionChanged,
   expectationChanged,
+  expectationReferenceKeys,
   movementDecided,
   sameFacts,
 } from '@nostro-labs/nostro'
@@ -156,6 +158,18 @@ class PgReader implements StoreReader {
       [tenantId, reference],
     )
     return row === undefined ? null : toExpectation(row)
+  }
+
+  async getExpectationsByNormalizedReference(tenantId: string, normalized: string): Promise<Expectation[]> {
+    if (normalized === '') return []
+    const rows = await this.run<ExpectationRow>(
+      `SELECT e.* FROM ${this.s}.expectation_reference_index k
+         JOIN ${this.s}.expectations e ON e.id = k.expectation_id
+        WHERE k.tenant_id = $1 AND k.normalized = $2
+        ORDER BY e.seq`,
+      [tenantId, normalized],
+    )
+    return rows.map(toExpectation)
   }
 
   async listExpectations(q: ExpectationQuery): Promise<Expectation[]> {
@@ -495,6 +509,13 @@ class PgTx extends PgReader implements StoreTx {
         ],
       )
       await this.run(`RELEASE SAVEPOINT ${savepoint}`)
+      for (const normalized of expectationReferenceKeys(n.reference, n.memo)) {
+        await this.run(
+          `INSERT INTO ${this.s}.expectation_reference_index (tenant_id, normalized, expectation_id)
+           VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+          [n.tenantId, normalized, row!.id],
+        )
+      }
       return toExpectation(row!)
     } catch (err) {
       await this.run(`ROLLBACK TO SAVEPOINT ${savepoint}`)
@@ -679,6 +700,30 @@ export class PostgresStore extends PgReader implements MigratableStore {
   }
 
   /**
+   * Fill the text-memo index for expectations written before migration 5.
+   * Idempotent, so a database rolled back and re-migrated does not double up.
+   */
+  private async backfillReferenceIndex(client: PoolClient): Promise<void> {
+    const { rows } = await client.query<{
+      id: string
+      tenant_id: string
+      reference: string
+      memo_type: Memo['type'] | null
+      memo_text: Buffer | null
+    }>(`SELECT id, tenant_id, reference, memo_type, memo_text FROM ${this.s}.expectations`)
+    const insert = `INSERT INTO ${this.s}.expectation_reference_index (tenant_id, normalized, expectation_id)
+                    VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`
+    for (const row of rows) {
+      const memo: Memo | null = row.memo_type === 'text'
+        ? { type: 'text', value: (row.memo_text ?? Buffer.alloc(0)).toString('utf8') }
+        : null
+      for (const normalized of expectationReferenceKeys(row.reference, memo)) {
+        await client.query(insert, [row.tenant_id, normalized, row.id])
+      }
+    }
+  }
+
+  /**
    * Create the schema and apply any pending migrations. Safe to call from
    * several processes at once: they serialise on an advisory lock.
    */
@@ -697,10 +742,12 @@ export class PostgresStore extends PgReader implements MigratableStore {
       const { rows } = await client.query<{ version: number }>(
         `SELECT coalesce(max(version), 0) AS version FROM ${this.s}.migrations`,
       )
-      for (let version = rows[0]!.version + 1; version <= MIGRATIONS.length; version++) {
-        await client.query(MIGRATIONS[version - 1]!(this.s))
-        await client.query(`INSERT INTO ${this.s}.migrations (version) VALUES ($1)`, [version])
+      const version = rows[0]!.version
+      for (let v = version + 1; v <= MIGRATIONS.length; v++) {
+        await client.query(MIGRATIONS[v - 1]!(this.s))
+        await client.query(`INSERT INTO ${this.s}.migrations (version) VALUES ($1)`, [v])
       }
+      if (version < 5) await this.backfillReferenceIndex(client)
       await client.query('COMMIT')
     } catch (err) {
       await client.query('ROLLBACK').catch(() => undefined)

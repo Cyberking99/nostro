@@ -58,7 +58,8 @@ describe('HorizonEffectsSource', () => {
       ['complete', { type: 'text', value: 'INV-10' }, B],
       ['complete', { type: 'text', value: 'INV-11' }, B],
     ])
-    expect(h.requests.map((u) => u.pathname)).toEqual([`/accounts/${A}/effects`, `/accounts/${A}/operations`])
+    // The root is read once to check the history window, then the operations feed.
+    expect(h.requests.map((u) => u.pathname)).toEqual([`/accounts/${A}/effects`, '/', `/accounts/${A}/operations`])
   })
 
   it('looks up operations the account feed does not list, such as a crossed maker trade', async () => {
@@ -127,6 +128,77 @@ describe('HorizonEffectsSource', () => {
     h.payment(10, B, A, '1')
     await sync({ store, source, tenantId: T, accounts: [A] })
     expect(await store.listMovements({ tenantId: T })).toHaveLength(1)
+  })
+
+  it('reports a gap when the stored cursor predates the retained window', async () => {
+    const h = new FakeHorizon()
+    h.elderLedger = 1_000
+    h.payment(10, B, A, '1')
+    h.payment(60_000, B, A, '2')
+    const result = await pull(effects(h), toid(10, 1), 10)
+    expect(result).toMatchObject({
+      gap: { reason: 'stale_cursor', cursorLedger: 10, firstLedger: 60_000, elderLedger: 1_000 },
+    })
+    expect(result.movements.map((m) => m.amount.toString())).toEqual(['2.0000000'])
+    expect(h.requests.some((u) => u.pathname === '/')).toBe(true)
+  })
+
+  it('reports a gap when the cursor is just below the elder ledger', async () => {
+    // The pubnet USDC check on 2026-11-06: elder 59,029,921, first retained
+    // effect at ledger 59,033,047 — a jump of only 3,126 ledgers.
+    const h = new FakeHorizon()
+    h.elderLedger = 59_029_921
+    h.payment(59_033_047, B, A, '2')
+    const result = await pull(effects(h), toid(59_029_000, 1), 10)
+    expect(result).toMatchObject({
+      gap: {
+        reason: 'stale_cursor',
+        cursorLedger: 59_029_000,
+        firstLedger: 59_033_047,
+        elderLedger: 59_029_921,
+      },
+    })
+  })
+
+  it('reports a gap on a first sync whose history does not start with account_created', async () => {
+    const h = new FakeHorizon()
+    h.elderLedger = 1_000
+    h.payment(60_000, B, A, '2')
+    const result = await pull(effects(h), null, 10)
+    expect(result).toMatchObject({ gap: { reason: 'first_sync', firstLedger: 60_000, elderLedger: 1_000 } })
+  })
+
+  it('does not fetch the root on an ordinary pull', async () => {
+    const h = new FakeHorizon()
+    h.elderLedger = 1_000
+    h.createAccount(10, A)
+    h.payment(10, B, A, '1')
+    const source = effects(h)
+    const first = await pull(source, null, 1)
+    expect(first.gap).toBeUndefined()
+    expect(h.requests.some((u) => u.pathname === '/')).toBe(false)
+    const second = await pull(source, first.cursor, 1)
+    expect(second.gap).toBeUndefined()
+    expect(h.requests.some((u) => u.pathname === '/')).toBe(false)
+  })
+
+  it('opens one gap exception with ledger evidence and keeps ingesting', async () => {
+    const h = new FakeHorizon()
+    h.elderLedger = 1_000
+    h.payment(10, B, A, '1')
+    h.payment(60_000, B, A, '2')
+    const store = new MemoryStore()
+    const key = { tenantId: T, network: 'testnet', source: 'horizon', account: A }
+    await store.transaction((tx) => tx.setCursor(key, toid(10, 1)))
+
+    const report = await sync({ store, source: effects(h), tenantId: T, accounts: [A] })
+    expect(report.accounts[0]).toMatchObject({ gaps: 1, inserted: 1, error: null })
+    expect(report.gaps).toBe(1)
+    const [gap] = await store.listExceptions({ tenantId: T, code: 'SOURCE_GAP_DETECTED' })
+    expect(gap).toMatchObject({ account: A, status: 'open' })
+    expect(gap!.evidence).toMatchObject({ cursorLedger: 10, elderLedger: 1_000, firstLedger: 60_000 })
+    expect(await store.getCursor(key)).toBe(`${toid(60_000, 1)}-1`)
+    expect((await store.listMovements({ tenantId: T })).map((m) => m.ledger)).toEqual([60_000])
   })
 })
 

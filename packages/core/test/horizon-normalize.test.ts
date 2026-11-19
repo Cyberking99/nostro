@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { FixtureSource } from 'nostro-testkit'
 import type { HorizonEffect, HorizonOperation, HorizonTransaction, NewMovement } from '../src/index.js'
 import { NATIVE, asset, normalizeEffects, normalizeFee, signedAmount } from '../src/index.js'
 
@@ -44,23 +45,31 @@ const summary = (m: NewMovement) => ({
 const USDC = asset('USDC', 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN')
 
 describe('normalizeEffects: payments', () => {
-  it('records both sides of a payment, enriched from the joined transaction', () => {
-    const f = load('payment-text-memo')
-    const [credit] = forAccount(f, f.operation.to!)
+  it('records both sides of a payment, enriched from the joined transaction', async () => {
+    // Replayed through FixtureSource rather than loading the JSON by hand.
+    const source = new FixtureSource({ fixture: new URL('payment-text-memo.json', dir) })
+    const to = 'GDKOLQZXXQGYI6IXLGMD5CKFUWGE5HLSCXHTIOONIYKD2NXEQB7HV3SW'
+    const from = 'GBXLXDPHYPRFH3GTKASNWQK2ZASBUYY2MIQ3Q5PC6XZQ6OSSXQPXXZTX'
+    const [credit] = source.movementsFor('t', to)
     expect(credit).toMatchObject({
       direction: 'credit',
       kind: 'transfer',
-      counterparty: f.operation.from,
+      counterparty: from,
       memo: { type: 'text', value: '' },
-      txHash: f.operation.transaction_hash,
+      txHash: 'e85780e225268aa3740c0f0ad4332407c0af17e03516100919843b552f4c246a',
       ledger: 64798891,
-      operationId: f.operation.id,
-      externalId: f.effects[0]!.id,
+      operationId: '278309117662806021',
+      externalId: '0278309117662806021-0000000001',
       enrichment: 'complete',
     })
-    const [debit] = forAccount(f, f.operation.from!)
-    expect(debit).toMatchObject({ direction: 'debit', counterparty: f.operation.to })
+    const [debit] = source.movementsFor('t', from)
+    expect(debit).toMatchObject({ direction: 'debit', counterparty: to })
     expect(debit!.amount.equals(credit!.amount)).toBe(true)
+
+    const pull = await source.pull({ tenantId: 't', account: to, cursor: null, limit: 100 })
+    expect(pull.movements).toHaveLength(1)
+    expect(pull.caughtUp).toBe(true)
+    expect((await source.pull({ tenantId: 't', account: to, cursor: pull.cursor, limit: 100 })).movements).toEqual([])
   })
 
   it('carries the muxed id of an M... destination', () => {

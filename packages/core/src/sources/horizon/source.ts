@@ -5,13 +5,13 @@
  * own cursor. Run both sources for every watched account, or the balance
  * invariant will be short by every fee the account paid.
  */
-import type { MovementSource, PullRequest, PullResult } from '../../ingest/index.js'
+import type { MovementSource, PullRequest, PullResult, SourceGap } from '../../ingest/index.js'
 import type { HorizonClient, Page } from './client.js'
 import { HorizonError } from './client.js'
 import type { NormalizeContext } from './normalize.js'
 import { normalizeEffects, normalizeFee } from './normalize.js'
 import type { HorizonEffect, HorizonOperation, HorizonTransaction } from './records.js'
-import { operationIdOf } from './records.js'
+import { ledgerOfToid, operationIdOf } from './records.js'
 
 export interface HorizonSourceOptions {
   readonly client: HorizonClient
@@ -50,6 +50,54 @@ const VALUE_EFFECTS = new Set([
 ])
 
 const isNotFound = (err: unknown): boolean => err instanceof HorizonError && err.status === 404
+
+/**
+ * A ledger jump this large is worth confirming with GET /. Horizon keeps a
+ * window from `history_elder_ledger`; a cursor just before it can produce a
+ * first record only a few thousand ledgers on, so this guard stays small
+ * enough to catch that case (the pubnet USDC check saw a 3,126-ledger jump).
+ * Without any guard, a pull across an ordinary ledger boundary would make a
+ * network call just to confirm nothing was lost.
+ */
+const LEDGER_JUMP = 1_000
+
+/** The ledger a stored cursor is at, or null for the start sentinel. */
+function cursorLedger(cursor: string | null): number | null {
+  if (cursor === null || cursor === FROM_START) return null
+  const toid = operationIdOf({ paging_token: cursor })
+  return /^\d+$/.test(toid) ? ledgerOfToid(toid) : null
+}
+
+/**
+ * Detect a retention gap without adding a call to an ordinary pull. A page
+ * that begins far past the cursor, or a first sync whose history does not
+ * begin with `account_created`, is the only reason to read GET /. An account
+ * created inside the window always starts its effects with `account_created`;
+ * the fees feed alone cannot tell an old account from a new one, so it only
+ * checks stored cursors.
+ */
+async function retentionGap(
+  client: HorizonClient,
+  cursor: string | null,
+  firstLedger: number,
+  firstType: string | null,
+  earliest: boolean,
+): Promise<SourceGap | null> {
+  const from = cursorLedger(cursor)
+  const stale = from !== null && firstLedger - from > LEDGER_JUMP
+  const firstSync = earliest && cursor === null && firstType !== 'account_created'
+  if (!stale && !firstSync) return null
+
+  const elder = (await client.root()).history_elder_ledger
+  if (!Number.isFinite(elder) || elder <= 0) return null
+  if (stale && from !== null && from < elder) {
+    return { reason: 'stale_cursor', cursorLedger: from, firstLedger, elderLedger: elder }
+  }
+  if (firstSync && firstLedger > elder) {
+    return { reason: 'first_sync', firstLedger, elderLedger: elder }
+  }
+  return null
+}
 
 /** A page, or an empty one if Horizon has never heard of the account. */
 async function pageOrEmpty<T extends { paging_token: string }>(
@@ -103,6 +151,15 @@ export class HorizonEffectsSource implements MovementSource {
     const page = await pageOrEmpty<HorizonEffect>(this.client, path, { order: 'asc', limit, cursor: from })
     if (page.records.length === 0) return { movements: [], cursor: from, caughtUp: true }
 
+    const first = page.records[0]!
+    const gap = await retentionGap(
+      this.client,
+      cursor,
+      ledgerOfToid(operationIdOf(first)),
+      first.type,
+      this.start === 'earliest',
+    )
+
     let caughtUp = page.records.length < limit
     let records = caughtUp ? [...page.records] : await this.wholeOperations(path, page.records, limit)
 
@@ -117,6 +174,7 @@ export class HorizonEffectsSource implements MovementSource {
       movements: normalizeEffects(records, operations, ctx),
       cursor: records[records.length - 1]!.paging_token,
       caughtUp,
+      ...(gap === null ? {} : { gap }),
     }
   }
 
@@ -221,11 +279,15 @@ export class HorizonFeesSource implements MovementSource {
       cursor: from,
       include_failed: true,
     })
+    const first = page.records[0]
+    const gap =
+      first === undefined ? null : await retentionGap(this.client, cursor, first.ledger, null, false)
     const ctx: NormalizeContext = { tenantId, network: this.network, source: this.name, account }
     return {
       movements: page.records.flatMap((tx) => normalizeFee(tx, ctx) ?? []),
       cursor: page.lastCursor ?? from,
       caughtUp: page.records.length < limit,
+      ...(gap === null ? {} : { gap }),
     }
   }
 }

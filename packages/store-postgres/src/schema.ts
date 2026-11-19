@@ -297,4 +297,17 @@ export const MIGRATIONS: readonly ((s: string) => string)[] = [
     CREATE TRIGGER journal_period_actions_no_truncate BEFORE TRUNCATE ON ${s}.journal_period_actions
       FOR EACH STATEMENT EXECUTE FUNCTION ${s}.journal_period_actions_append_only();
   `,
+  // 5: the text-memo lookup. Normalising is NFKC plus Unicode category
+  // removal, so the keys are computed in the application when an expectation
+  // is inserted and when this migration backfills older rows. Several
+  // expectations can normalise to the same key, so the index is many-to-many.
+  (s) => `
+    CREATE TABLE IF NOT EXISTS ${s}.expectation_reference_index (
+      tenant_id      text NOT NULL,
+      normalized     text NOT NULL,
+      expectation_id text NOT NULL REFERENCES ${s}.expectations (id),
+      PRIMARY KEY (tenant_id, normalized, expectation_id)
+    );
+    CREATE INDEX IF NOT EXISTS expectation_reference_keys ON ${s}.expectation_reference_index (tenant_id, normalized);
+  `,
 ]

@@ -15,7 +15,22 @@
  * which ledger that state is as of (the `Latest-Ledger` header);
  * `resource()` returns it. History feeds (effects, transactions) do not send
  * it.
+ *
+ * An optional token bucket paces requests before they are sent. Public Horizon
+ * does not publish its rate limit in headers, so the rate is configured, not
+ * discovered. One token is taken per attempt, retries included: the server
+ * counts those too. The bucket belongs to the client, so sources sharing it
+ * (effects and fees) share one allowance, and concurrent callers wait their
+ * turn. Off by default.
  */
+
+/** Client-side pacing. Horizon's own budget is not reported by the server. */
+export interface HorizonRateLimit {
+  /** Sustained request rate. Must be positive. */
+  readonly requestsPerSecond: number
+  /** Tokens available at once, for a short burst. At least 1. */
+  readonly burst: number
+}
 
 export interface HorizonClientOptions {
   /** Base URL, e.g. `https://horizon-testnet.stellar.org`. A path prefix is preserved. */
@@ -31,9 +46,47 @@ export interface HorizonClientOptions {
   /** Longest `Retry-After` we will sleep for before giving up. Default 60s. */
   readonly maxRetryAfterMs?: number
   readonly headers?: Readonly<Record<string, string>>
+  /** Pace requests with a token bucket shared by every call on this client. Off by default. */
+  readonly rateLimit?: HorizonRateLimit
   /** Injected for tests. */
   readonly sleep?: (ms: number) => Promise<void>
   readonly random?: () => number
+  /** Clock in milliseconds, injected for tests. Defaults to `Date.now()`. */
+  readonly now?: () => number
+}
+
+/**
+ * A token bucket whose clock can be injected. `at` is the logical time up to
+ * which tokens have been accounted for; reservations past that time are what
+ * make concurrent callers space themselves out even when the clock is stubbed.
+ */
+class TokenBucket {
+  private tokens: number
+  private at: number
+
+  constructor(
+    private readonly perSecond: number,
+    private readonly capacity: number,
+    now: number,
+  ) {
+    this.tokens = capacity
+    this.at = now
+  }
+
+  /** Consume a token, returning how long the caller must wait before attempting. */
+  take(now: number): number {
+    const at = Math.max(now, this.at)
+    this.tokens = Math.min(this.capacity, this.tokens + ((at - this.at) * this.perSecond) / 1000)
+    this.at = at
+    if (this.tokens >= 1) {
+      this.tokens -= 1
+      return this.at - now
+    }
+    const wait = ((1 - this.tokens) * 1000) / this.perSecond
+    this.at = at + wait
+    this.tokens = 0
+    return this.at - now
+  }
 }
 
 /** One page of a Horizon collection. */
@@ -47,6 +100,12 @@ export interface Page<T> {
 export interface Resource<T> {
   readonly body: T
   readonly latestLedger: number | null
+}
+
+/** The root document: the span of history this Horizon still keeps. */
+export interface HorizonRoot {
+  readonly history_elder_ledger: number
+  readonly history_latest_ledger: number
 }
 
 export type QueryValue = string | number | boolean | undefined
@@ -99,6 +158,8 @@ export class HorizonClient {
   private readonly headers: Readonly<Record<string, string>>
   private readonly sleep: (ms: number) => Promise<void>
   private readonly random: () => number
+  private readonly now: () => number
+  private readonly bucket: TokenBucket | null
 
   constructor(options: HorizonClientOptions) {
     this.base = options.url.replace(/\/+$/, '')
@@ -111,6 +172,19 @@ export class HorizonClient {
     this.headers = { Accept: 'application/hal+json, application/problem+json', ...options.headers }
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
     this.random = options.random ?? Math.random
+    this.now = options.now ?? (() => Date.now())
+    const limit = options.rateLimit
+    if (limit !== undefined) {
+      if (!Number.isFinite(limit.requestsPerSecond) || limit.requestsPerSecond <= 0) {
+        throw new Error('rateLimit.requestsPerSecond must be a positive number')
+      }
+      if (!Number.isInteger(limit.burst) || limit.burst < 1) {
+        throw new Error('rateLimit.burst must be a whole number of at least 1')
+      }
+      this.bucket = new TokenBucket(limit.requestsPerSecond, limit.burst, this.now())
+    } else {
+      this.bucket = null
+    }
   }
 
   url(path: string, query: Readonly<Record<string, QueryValue>> = {}): string {
@@ -123,6 +197,11 @@ export class HorizonClient {
   /** GET a single resource. */
   async get<T>(path: string, query: Readonly<Record<string, QueryValue>> = {}): Promise<T> {
     return (await this.request(this.url(path, query))).body as T
+  }
+
+  /** GET /: the oldest and newest ledgers whose history Horizon still has. */
+  async root(): Promise<HorizonRoot> {
+    return (await this.request(this.url('/'))).body as HorizonRoot
   }
 
   /** GET a single resource, and the ledger its state is as of, when the server says. */
@@ -149,6 +228,11 @@ export class HorizonClient {
 
   private async request(url: string): Promise<Resource<unknown>> {
     for (let attempt = 0; ; attempt++) {
+      // The server counts retries too, so every attempt takes its own token.
+      if (this.bucket !== null) {
+        const wait = this.bucket.take(this.now())
+        if (wait > 0) await this.sleep(wait)
+      }
       let error: HorizonError
       try {
         return await this.attempt(url)
@@ -216,7 +300,7 @@ export class HorizonClient {
         ? (problem.extras as Record<string, unknown>)
         : null,
       RETRYABLE_STATUS.has(response.status),
-      parseRetryAfter(response.headers.get('retry-after')),
+      parseRetryAfter(response.headers.get('retry-after'), this.now()),
     )
   }
 }

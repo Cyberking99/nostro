@@ -26,7 +26,6 @@
 
 import type { NewMovement } from '../../model/index.js'
 import { Money } from '../../money/index.js'
-import { contractAsset, parseAsset } from '../../money/asset.js'
 import type { AssetId } from '../../money/asset.js'
 
 // ─── Public error ─────────────────────────────────────────────────────────────

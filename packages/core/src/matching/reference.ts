@@ -15,6 +15,8 @@
  * and nothing is stripped from the middle of a reference.
  */
 
+import type { Memo } from '../model/index.js'
+
 const INVISIBLE = /[​-‍⁠﻿\p{Cc}]/gu
 const LEADING = /^[\s\-_./#:]+/
 const PREFIX = /^(?:INVOICE|INV|REF|NO|#)(?=[\s\-_./#:]|\d|$)[\s\-_./#:]*/
@@ -41,4 +43,21 @@ export function normalizeReference(text: string): string {
     s = next
   }
   return s
+}
+
+/**
+ * The keys a payer's text memo can quote to find this expectation. Both the
+ * invoice reference and the memo the payer was asked to send are indexed, so
+ * a second payment quoting either is found even once the expectation is
+ * settled. Empty keys are dropped: they would match every text memo.
+ */
+export function expectationReferenceKeys(reference: string, memo: Memo | null | undefined): string[] {
+  const keys = new Set<string>()
+  const ref = normalizeReference(reference)
+  if (ref !== '') keys.add(ref)
+  if (memo?.type === 'text') {
+    const asked = normalizeReference(memo.value)
+    if (asked !== '') keys.add(asked)
+  }
+  return [...keys]
 }

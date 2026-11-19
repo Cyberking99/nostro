@@ -1,6 +1,6 @@
-import { COMMON, NETWORK, accounts, flag, network, positionals, tenant } from '../args.js'
+import { COMMON, NETWORK, RATE_LIMIT, accounts, flag, network, positionals, rateLimit, tenant } from '../args.js'
 import type { Command } from '../command.js'
-import { COMMON_HELP, NETWORK_HELP, horizonClient, movementSources, withStore } from '../command.js'
+import { COMMON_HELP, NETWORK_HELP, RATE_LIMIT_HELP, horizonClient, movementSources, withStore } from '../command.js'
 import { json, table, write } from '../io.js'
 import type { StreamProgress } from '../work.js'
 import { syncAll } from '../work.js'
@@ -16,9 +16,10 @@ position is saved in the same transaction as the movements it covers.
 
 Options:
 ${NETWORK_HELP}
+${RATE_LIMIT_HELP}
   --once              Read at most one round of pages per account, then stop
 ${COMMON_HELP}`,
-  options: { ...COMMON, ...NETWORK, once: { type: 'boolean' } },
+  options: { ...COMMON, ...NETWORK, ...RATE_LIMIT, once: { type: 'boolean' } },
   async run(args, io) {
     positionals(args, 0)
     const tenantId = tenant(args, io)
@@ -28,7 +29,7 @@ ${COMMON_HELP}`,
     const asJson = flag(args, 'json')
     const progress = io.stderr.isTTY === true && !asJson
 
-    const client = horizonClient(net, io)
+    const client = horizonClient(net, io, rateLimit(args))
     const results = await withStore(args, io, (store) =>
       syncAll({
         store,
@@ -66,10 +67,18 @@ ${COMMON_HELP}`,
       ]),
     )
     const conflicts = results.reduce((n, r) => n + r.conflicts, 0)
+    const gaps = results.reduce((n, r) => n + r.gaps, 0)
     if (conflicts > 0) {
       await write(
         io.stdout,
         `${conflicts} re-delivered record(s) disagreed with what was recorded; each opened a ` +
+          `SOURCE_GAP_DETECTED exception (nostro exceptions --code SOURCE_GAP_DETECTED).\n`,
+      )
+    }
+    if (gaps > 0) {
+      await write(
+        io.stdout,
+        `${gaps} history gap(s) found where Horizon no longer keeps records; each opened a ` +
           `SOURCE_GAP_DETECTED exception (nostro exceptions --code SOURCE_GAP_DETECTED).\n`,
       )
     }

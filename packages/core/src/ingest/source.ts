@@ -17,6 +17,18 @@ export interface PullRequest {
   readonly limit: number
 }
 
+/** Evidence that a feed starts after the point this pull needed to read from. */
+export interface SourceGap {
+  /** Why the source looked: a stored cursor before the window, or a first sync. */
+  readonly reason: 'stale_cursor' | 'first_sync'
+  /** Ledger of the stored cursor, when there was one. */
+  readonly cursorLedger?: number
+  /** Ledger of the first record Horizon returned. */
+  readonly firstLedger: number
+  /** Oldest ledger Horizon still keeps history for, from GET /. */
+  readonly elderLedger: number
+}
+
 export interface PullResult {
   readonly movements: readonly NewMovement[]
   /**
@@ -27,6 +39,12 @@ export interface PullResult {
   readonly cursor: string | null
   /** True when the feed had nothing beyond this batch at the time of the pull. */
   readonly caughtUp: boolean
+  /**
+   * History Horizon no longer keeps, when detected. Ingest carries on with
+   * the movements that were returned; the caller opens a
+   * SOURCE_GAP_DETECTED exception for a person to resolve.
+   */
+  readonly gap?: SourceGap
 }
 
 export interface MovementSource {

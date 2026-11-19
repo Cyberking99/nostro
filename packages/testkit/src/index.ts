@@ -1,6 +1,8 @@
 export { describeStoreConformance } from './store-conformance.js'
 export { describeJournalConformance } from './journal-conformance.js'
 export { FakeHorizon, hash, toid } from './horizon.js'
+export { FixtureSource } from './fixture-source.js'
+export type { FixtureSourceOptions, HorizonFixture } from './fixture-source.js'
 export type { PaymentOptions } from './horizon.js'
 export { checkBooks, describeStoreProperties, parseCsv, snapshot } from './properties.js'
 export type { PropertyOptions } from './properties.js'

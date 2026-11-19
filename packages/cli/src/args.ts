@@ -6,6 +6,7 @@
 import { parseArgs } from "node:util";
 import type { ParseArgsConfig } from "node:util";
 import { isAccountId } from "@nostro-labs/nostro";
+import type { HorizonRateLimit } from "@nostro-labs/nostro";
 import type { Io } from "./io.js";
 
 /** The command line was wrong. Exit status 2. */
@@ -46,6 +47,25 @@ export const NETWORK: OptionSpec = {
   horizon: { type: "string" },
   account: { type: "string", multiple: true },
 };
+
+/** Commands that read Horizon can pace their requests with a token bucket. */
+export const RATE_LIMIT: OptionSpec = {
+  "rate-limit": { type: "string" },
+  burst: { type: "string" },
+};
+
+/** `--rate-limit` and `--burst`, or undefined when pacing is not requested. */
+export function rateLimit(args: Args): HorizonRateLimit | undefined {
+  const raw = string(args, "rate-limit");
+  if (raw === undefined) {
+    if (string(args, "burst") !== undefined) throw new UsageError("--burst needs --rate-limit.");
+    return undefined;
+  }
+  if (!/^\d+(?:\.\d+)?$/.test(raw) || Number(raw) <= 0) {
+    throw new UsageError("--rate-limit must be a positive number of requests per second.");
+  }
+  return { requestsPerSecond: Number(raw), burst: integer(args, "burst", 1, 1, 100_000) };
+}
 
 export function parse(argv: readonly string[], options: OptionSpec): Args {
   try {

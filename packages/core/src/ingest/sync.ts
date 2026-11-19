@@ -33,6 +33,8 @@ export interface AccountSyncReport {
   readonly duplicates: number
   /** Re-deliveries that disagreed with recorded facts; each opened a SOURCE_GAP_DETECTED exception. */
   readonly conflicts: number
+  /** Retention gaps found; each opened a SOURCE_GAP_DETECTED exception. */
+  readonly gaps: number
   /** The cursor after this sync. */
   readonly cursor: string | null
   readonly caughtUp: boolean
@@ -46,6 +48,7 @@ export interface SyncReport {
   readonly inserted: number
   readonly duplicates: number
   readonly conflicts: number
+  readonly gaps: number
   readonly errors: readonly { readonly account: string; readonly error: Error }[]
 }
 
@@ -69,6 +72,7 @@ export async function sync(options: SyncOptions): Promise<SyncReport> {
     inserted: reports.reduce((n, r) => n + r.inserted, 0),
     duplicates: reports.reduce((n, r) => n + r.duplicates, 0),
     conflicts: reports.reduce((n, r) => n + r.conflicts, 0),
+    gaps: reports.reduce((n, r) => n + r.gaps, 0),
     errors: reports.flatMap((r) => (r.error === null ? [] : [{ account: r.account, error: r.error }])),
   }
 }
@@ -84,6 +88,7 @@ async function syncAccount(
   let inserted = 0
   let duplicates = 0
   let conflicts = 0
+  let gaps = 0
   let caughtUp = false
   let contended = false
   let error: Error | null = null
@@ -111,13 +116,35 @@ async function syncAccount(
             evidence: conflictEvidence(conflict),
           })
         }
+        let gapOpened = false
+        if (pulled.gap !== undefined) {
+          gapOpened = true
+          await tx.openException({
+            tenantId,
+            code: 'SOURCE_GAP_DETECTED',
+            account,
+            detail:
+              `${source.name} ${pulled.gap.reason}: Horizon keeps history from ledger ` +
+              `${pulled.gap.elderLedger}, but the read needed ` +
+              `${pulled.gap.cursorLedger === undefined ? 'the start of the account' : `ledger ${pulled.gap.cursorLedger}`}; ` +
+              `records before the window were lost.`,
+            evidence: {
+              reason: pulled.gap.reason,
+              source: source.name,
+              ...(pulled.gap.cursorLedger === undefined ? {} : { cursorLedger: pulled.gap.cursorLedger }),
+              firstLedger: pulled.gap.firstLedger,
+              elderLedger: pulled.gap.elderLedger,
+            },
+          })
+        }
         if (pulled.cursor !== null && pulled.cursor !== from) await tx.setCursor(key, pulled.cursor)
-        return written
+        return { ...written, gapOpened }
       })
 
       inserted += result.inserted.length
       duplicates += result.duplicates.length
       conflicts += result.conflicts.length
+      if (result.gapOpened) gaps += 1
       cursor = pulled.cursor
       caughtUp = pulled.caughtUp
     }
@@ -126,7 +153,7 @@ async function syncAccount(
     else error = err instanceof Error ? err : new Error(String(err))
   }
 
-  return { account, batches, inserted, duplicates, conflicts, cursor, caughtUp, contended, error }
+  return { account, batches, inserted, duplicates, conflicts, gaps, cursor, caughtUp, contended, error }
 }
 
 /** A source must only return movements for the stream it was asked about. */

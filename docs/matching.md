@@ -8,7 +8,9 @@ randomness, and every decision records its reasons as evidence.
 
 1. **Fees are never matched.** They are ignored with a reason and belong to the journal as expense.
 2. **Every strategy scores every candidate.** Candidates are the account's open and part-paid
-   expectations in the same direction, plus any expectation whose muxed id the movement carries.
+   expectations in the same direction, plus any expectation (settled included) whose muxed id the
+   movement carries or whose normalised reference or requested text memo equals the movement's
+   normalised text memo. This is what catches a second payment quoting a settled invoice.
 3. **Scores combine by family.** Within a family only the strongest signal counts; across families
    they combine as `1 − Π(1 − sᵢ)`. A muxed id and a memo both identify the expectation, so finding
    both is not twice the evidence. A memo plus a unique amount is.
@@ -133,8 +135,5 @@ These are known gaps, each planned as its own self-contained piece of work:
 - **Slippage tolerance** for path payments delivering slightly less than asked.
 - **One payment covering several invoices** with no per-invoice reference. Today this is an
   exception for a person to split.
-- **A second payment quoting a settled invoice's text reference** is raised as
-  `UNMATCHED_NO_CANDIDATE` rather than `DUPLICATE_PAYMENT`: settled expectations are only found again
-  through a muxed id.
 - **Return memos on credits.** A `MEMO_RETURN` currently raises `MEMO_MALFORMED`. Pairing it with
   the original payment is left for the refunds work (#15).
