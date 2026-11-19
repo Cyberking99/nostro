@@ -21,6 +21,7 @@
 import type { ExceptionCode, Json, Movement } from '../model/index.js'
 import type { Money } from '../money/index.js'
 import { isSameCodeDifferentIssuer } from '../money/index.js'
+import { normalizeReference } from './reference.js'
 import { DEFAULT_STRATEGIES } from './strategies/index.js'
 import type { Candidate, MatchStrategy, Signal, SignalFamily } from './types.js'
 
@@ -93,6 +94,14 @@ function unmatchedCode(movement: Movement, candidates: readonly Candidate[]): Ex
   if (movement.memo === null && movement.muxedId === null) {
     return candidates.length > 0 ? 'MEMO_MISSING' : 'UNEXPECTED_CREDIT'
   }
+  // A memo is present but cannot be used for matching:
+  // - return memos are for refunds (#15 in roadmap)
+  // - a text memo that normalises to empty (e.g. just "#" or "INV") has no
+  //   usable content; there is nothing to match against
+  // A hash memo is matched by `memo_hash`, so one that matches nothing is
+  // simply unmatched.
+  if (movement.memo?.type === 'return') return 'MEMO_MALFORMED'
+  if (movement.memo?.type === 'text' && normalizeReference(movement.memo.value) === '') return 'MEMO_MALFORMED'
   return 'UNMATCHED_NO_CANDIDATE'
 }
 
@@ -132,6 +141,21 @@ export function decide(
   }
 
   const lead = second === undefined ? top.score : top.score - second.score
+  const strongest = [...top.signals].sort((a, b) => b.score - a.score)[0]
+  if (top.score < threshold) {
+    // A truncated memo is a strong hint, not an identifier. Name the likely
+    // expectation when it stands alone, but leave a genuine tie ambiguous.
+    if (strongest?.strategy === 'memo_truncated' && lead >= margin) {
+      return {
+        outcome: 'exception',
+        code: 'MEMO_TRUNCATED',
+        expectationId: top.candidate.expectation.id,
+        amount: movement.amount,
+        detail: `Memo looks cut at 28 bytes; it prefixes reference ${top.candidate.expectation.reference}.`,
+        evidence,
+      }
+    }
+  }
   if (top.score < threshold || lead < margin) {
     const why =
       top.score < threshold
@@ -179,13 +203,12 @@ export function decide(
 
   const amount = movement.amount.compare(remaining) > 0 ? remaining : movement.amount
   const residual = movement.amount.subtract(amount)
-  const strongest = [...top.signals].sort((a, b) => b.score - a.score)[0]!
   return {
     outcome: 'allocate',
     expectationId: expectation.id,
     amount,
     residual: residual.isZero() ? null : residual,
-    strategy: strongest.strategy,
+    strategy: strongest!.strategy,
     score: round(top.score),
     evidence,
   }

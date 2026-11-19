@@ -153,6 +153,18 @@ describe('decide: identifying the expectation', () => {
     },
   )
 
+  it('settles on an exact hash memo, and ignores a different hash', () => {
+    const hash = 'a'.repeat(64)
+    const e = expectation({ memo: { type: 'hash', value: hash }, amount: usdc('99') })
+    expect(allocation(decide(movement({ memo: { type: 'hash', value: hash } }), [candidate(e)]))).toMatchObject({
+      expectationId: e.id,
+      strategy: 'memo_hash',
+      score: 0.95,
+    })
+    const other = exception(decide(movement({ memo: { type: 'hash', value: 'b'.repeat(64) } }), [candidate(e)]))
+    expect(other.code).toBe('UNMATCHED_NO_CANDIDATE')
+  })
+
   it('matches a text memo against the memo the expectation asked for', () => {
     const e = expectation({ reference: 'internal-7781', memo: { type: 'text', value: 'ACME-42' } })
     expect(allocation(decide(movement({ memo: { type: 'text', value: 'acme 42' } }), [candidate(e)])).expectationId).toBe(e.id)
@@ -164,6 +176,45 @@ describe('decide: identifying the expectation', () => {
     expect(both.score).toBe(1)
     const memoAndAmount = allocation(decide(movement({ memo: { type: 'text', value: 'INV-1' } }), [candidate(e)]))
     expect(memoAndAmount.score).toBe(0.94)
+  })
+})
+
+describe('decide: truncated memos', () => {
+  const reference = 'INVOICE-2026-ACME-CORPORATION-000123'
+  const cut = 'INVOICE-2026-ACME-CORPORATIO'
+
+  it('raises MEMO_TRUNCATED when a 28-byte prefix is the best evidence', () => {
+    const e = expectation({ reference, amount: usdc('99') })
+    const d = exception(decide(movement({ memo: { type: 'text', value: cut } }), [candidate(e)]))
+    expect(d).toMatchObject({ code: 'MEMO_TRUNCATED', expectationId: e.id })
+    expect(d.detail).toContain(reference)
+  })
+
+  it('treats a U+FFFD from a character cut in half as truncated', () => {
+    const multi = 'INVOICE-2026-ACME-CORPORATSÁCTION-000123'
+    const memo = 'INVOICE-2026-ACME-CORPORATS\uFFFD'
+    const e = expectation({ reference: multi, amount: usdc('99') })
+    const d = exception(decide(movement({ memo: { type: 'text', value: memo } }), [candidate(e)]))
+    expect(d).toMatchObject({ code: 'MEMO_TRUNCATED', expectationId: e.id })
+  })
+
+  it('does not fire for a prefix shorter than 28 bytes', () => {
+    const e = expectation({ reference, amount: usdc('99') })
+    const d = exception(decide(movement({ memo: { type: 'text', value: cut.slice(0, 27) } }), [candidate(e)]))
+    expect(d.code).toBe('UNMATCHED_NO_CANDIDATE')
+  })
+
+  it('leaves two references sharing the prefix ambiguous', () => {
+    const a = expectation({ reference, amount: usdc('99') })
+    const b = expectation({ reference: 'INVOICE-2026-ACME-CORPORATION-000124', amount: usdc('99') })
+    const d = exception(decide(movement({ memo: { type: 'text', value: cut } }), [candidate(a), candidate(b)]))
+    expect(d.code).toBe('AMBIGUOUS_MATCH')
+  })
+
+  it('settles when a unique exact amount corroborates the truncated memo', () => {
+    const e = expectation({ reference })
+    const d = allocation(decide(movement({ memo: { type: 'text', value: cut } }), [candidate(e)]))
+    expect(d).toMatchObject({ expectationId: e.id, strategy: 'memo_truncated', score: 0.84 })
   })
 })
 
@@ -182,6 +233,40 @@ describe('decide: amounts', () => {
     )
     expect(d.amount.toString()).toBe('6.0000000')
     expect(d.residual!.toString()).toBe('3.0000000')
+  })
+})
+
+describe('decide: known payers', () => {
+  it('scores a known payer alone as ambiguous, with the payer as evidence', () => {
+    const e = expectation({ payers: [PAYER], amount: usdc('99') })
+    const d = exception(decide(movement({ amount: usdc('3') }), [candidate(e)]))
+    expect(d.code).toBe('AMBIGUOUS_MATCH')
+    expect(d.detail).toMatch(/0.4, below the 0.7 threshold/)
+    expect(JSON.stringify(d.evidence)).toContain('known payer')
+  })
+
+  it('settles when a known payer corroborates the only candidate owed that amount', () => {
+    const e = expectation({ payers: [PAYER] })
+    const d = allocation(decide(movement(), [candidate(e)]))
+    expect(d).toMatchObject({ expectationId: e.id, score: 0.76 })
+  })
+
+  it('stays ambiguous when another candidate is owed the same amount', () => {
+    const known = expectation({ payers: [PAYER] })
+    const other = expectation()
+    const d = exception(decide(movement(), [candidate(known), candidate(other)]))
+    expect(d.code).toBe('AMBIGUOUS_MATCH')
+    const listed = (d.evidence as { candidates: { expectationId: string; score: number }[] }).candidates
+    expect(listed.map((c) => [c.expectationId, c.score])).toEqual([
+      [known.id, 0.52],
+      [other.id, 0.2],
+    ])
+  })
+
+  it('does not fire without a counterparty', () => {
+    const e = expectation({ payers: [PAYER], amount: usdc('99') })
+    const d = exception(decide(movement({ counterparty: null, amount: usdc('3') }), [candidate(e)]))
+    expect(d.code).toBe('MEMO_MISSING')
   })
 })
 

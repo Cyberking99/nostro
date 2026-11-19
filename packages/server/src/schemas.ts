@@ -20,6 +20,7 @@ export const MAX_LIMIT = 500
 export const ACCOUNT = '^G[A-Z2-7]{55}$'
 export const UINT64 = '^[0-9]{1,20}$'
 const AMOUNT = '^[0-9]+(\\.[0-9]+)?$'
+const HASH = '^[0-9a-f]{64}$'
 
 const paging = {
   after: { type: 'integer', minimum: 0, description: 'Return records after this `seq`: the `next` of the previous page.' },
@@ -74,10 +75,26 @@ export const expectationBody = {
     direction: { enum: ['credit', 'debit'] },
     muxedId: { anyOf: [{ type: 'string', pattern: UINT64 }, { const: 'issue' }] },
     memo: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['type', 'value'],
-      properties: { type: { enum: ['text', 'id'] }, value: { type: 'string', minLength: 1 } },
+      oneOf: [
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['type', 'value'],
+          properties: { type: { const: 'text' }, value: { type: 'string', minLength: 1 } },
+        },
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['type', 'value'],
+          properties: { type: { const: 'id' }, value: { type: 'string', minLength: 1 } },
+        },
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['type', 'value'],
+          properties: { type: { const: 'hash' }, value: { type: 'string', pattern: HASH } },
+        },
+      ],
     },
     payers: { type: 'array', maxItems: 100, items: { type: 'string', pattern: ACCOUNT } },
     dueAt: { type: 'string', format: 'date-time' },
@@ -152,7 +169,19 @@ export const amendExpectationBody = {
           type: 'object',
           additionalProperties: false,
           required: ['type', 'value'],
-          properties: { type: { enum: ['text', 'id'] }, value: { type: 'string', minLength: 1 } },
+          properties: { type: { const: 'text' }, value: { type: 'string', minLength: 1 } },
+        },
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['type', 'value'],
+          properties: { type: { const: 'id' }, value: { type: 'string', minLength: 1 } },
+        },
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['type', 'value'],
+          properties: { type: { const: 'hash' }, value: { type: 'string', pattern: HASH } },
         },
         { type: 'null' },
       ],

@@ -79,13 +79,13 @@ describe('SqliteStore', () => {
   it('migrates idempotently and records the schema version', async () => {
     const filename = freshFile()
     const store = new SqliteStore({ filename })
-    expect(await store.schemaVersion()).toEqual({ current: 0, latest: 6 })
+    expect(await store.schemaVersion()).toEqual({ current: 0, latest: 7 })
     await store.migrate()
     await store.migrate()
-    expect(await store.schemaVersion()).toEqual({ current: 6, latest: 6 })
+    expect(await store.schemaVersion()).toEqual({ current: 7, latest: 7 })
     await store.close()
     const db = new Database(filename, { readonly: true })
-    expect(db.pragma('user_version', { simple: true })).toBe(6)
+    expect(db.pragma('user_version', { simple: true })).toBe(7)
     expect(db.pragma('journal_mode', { simple: true })).toBe('wal')
     db.close()
   })
@@ -169,20 +169,20 @@ describe('SqliteStore', () => {
     await upgraded.close()
   })
 
-  it('migrates a v5 database with duplicate muxed ids and refuses later duplicates', async () => {
+  it('migrates a v6 database with duplicate muxed ids and refuses later duplicates', async () => {
     const filename = freshFile()
     const insertSql = `INSERT INTO expectations (id, tenant_id, reference, account, direction, asset, decimals, amount, muxed_id, payers, status, metadata, created_at, updated_at)
       VALUES (?, 't', ?, 'G${'A'.repeat(55)}', 'credit', 'native', 7, '1', '7', '[]', 'open', '{}', 0, 0)`
 
-    const v5 = new Database(filename)
-    for (const migration of MIGRATIONS.slice(0, 5)) v5.exec(migration)
-    v5.pragma('user_version = 5')
-    v5.prepare(insertSql).run('e1', 'r1')
-    v5.prepare(insertSql).run('e2', 'r2')
-    v5.close()
+    const v6 = new Database(filename)
+    for (const migration of MIGRATIONS.slice(0, 6)) v6.exec(migration)
+    v6.pragma('user_version = 6')
+    v6.prepare(insertSql).run('e1', 'r1')
+    v6.prepare(insertSql).run('e2', 'r2')
+    v6.close()
 
     const store = await freshStore(filename)
-    expect(await store.schemaVersion()).toEqual({ current: 6, latest: 6 })
+    expect(await store.schemaVersion()).toEqual({ current: 7, latest: 7 })
     expect((await doctor({ store, tenantId: 't' })).findings).toEqual([
       expect.objectContaining({ code: 'muxed_id_duplicate' }),
     ])
@@ -194,6 +194,31 @@ describe('SqliteStore', () => {
     const raw = new Database(filename)
     expect(() => raw.prepare(insertSql).run('e3', 'r3')).toThrow(/muxed id already used on account/)
     raw.close()
+  })
+
+  it('backfills the text-memo index when upgrading a database with existing rows', async () => {
+    const filename = freshFile()
+    const store = await freshStore(filename)
+    const e = await store.transaction((tx) =>
+      tx.insertExpectation({
+        tenantId: 't',
+        reference: 'INV-9',
+        account: `G${'A'.repeat(55)}`,
+        amount: Money.parse('10', NATIVE),
+        memo: { type: 'text', value: 'REF-8' },
+      }),
+    )
+    await store.close()
+    const db = new Database(filename)
+    db.exec('DROP TABLE expectation_reference_index; PRAGMA user_version = 5')
+    db.close()
+
+    const upgraded = await freshStore(filename)
+    const ids = async (key: string) => (await upgraded.getExpectationsByNormalizedReference('t', key)).map((x) => x.id)
+    expect(await ids('9')).toEqual([e.id])
+    expect(await ids('8')).toEqual([e.id])
+    expect(await ids('')).toEqual([])
+    await upgraded.close()
   })
 
   it('sees committed data across separate store instances on one file', async () => {

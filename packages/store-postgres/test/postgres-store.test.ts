@@ -50,22 +50,22 @@ if (pool === undefined) {
       await Promise.all([1, 2, 3].map(() => freshStore({ schema })))
       await freshStore({ schema })
       const { rows } = await pool.query(`SELECT version FROM "${schema}".migrations ORDER BY version`)
-      expect(rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5])
+      expect(rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6])
     })
 
     it('reports the schema version without changing it', async () => {
       const schema = `nostro_test_${randomUUID().replaceAll('-', '').slice(0, 16)}`
       schemas.push(schema)
       const store = new PostgresStore({ pool: pool!, schema })
-      expect(await store.schemaVersion()).toEqual({ current: 0, latest: 5 })
-      expect(await store.schemaVersion()).toEqual({ current: 0, latest: 5 })
+      expect(await store.schemaVersion()).toEqual({ current: 0, latest: 6 })
+      expect(await store.schemaVersion()).toEqual({ current: 0, latest: 6 })
       await store.migrate()
-      expect(await store.schemaVersion()).toEqual({ current: 5, latest: 5 })
-      await pool.query(`DELETE FROM "${schema}".migrations WHERE version = 3`)
-      expect(await store.schemaVersion()).toEqual({ current: 2, latest: 5 })
+      expect(await store.schemaVersion()).toEqual({ current: 6, latest: 6 })
+      await pool.query(`DELETE FROM "${schema}".migrations WHERE version >= 3`)
+      expect(await store.schemaVersion()).toEqual({ current: 2, latest: 6 })
     })
 
-    it('migrates a version 4 database with duplicate muxed ids and refuses later duplicates', async () => {
+    it('migrates a version 5 database with duplicate muxed ids and refuses later duplicates', async () => {
       const schema = `nostro_test_${randomUUID().replaceAll('-', '').slice(0, 16)}`
       schemas.push(schema)
       const s = quoteSchema(schema)
@@ -82,8 +82,8 @@ if (pool === undefined) {
           `CREATE TABLE ${s}.migrations (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`,
         )
         await client.query('BEGIN')
-        for (const migration of MIGRATIONS.slice(0, 4)) await client.query(migration(s))
-        for (let version = 1; version <= 4; version++) {
+        for (const migration of MIGRATIONS.slice(0, 5)) await client.query(migration(s))
+        for (let version = 1; version <= 5; version++) {
           await client.query(`INSERT INTO ${s}.migrations (version) VALUES ($1)`, [version])
         }
         await client.query(rawExpectation('e1', 'r1'))
@@ -98,7 +98,7 @@ if (pool === undefined) {
 
       const store = new PostgresStore({ pool: pool!, schema })
       await store.migrate()
-      expect(await store.schemaVersion()).toEqual({ current: 5, latest: 5 })
+      expect(await store.schemaVersion()).toEqual({ current: 6, latest: 6 })
       expect((await doctor({ store, tenantId: 't' })).findings).toEqual([
         expect.objectContaining({ code: 'muxed_id_duplicate' }),
       ])
@@ -287,15 +287,39 @@ if (pool === undefined) {
       it('upgrades a version 1 database with data to the latest version', async () => {
         const { store, s, movement } = await withMovement()
         // Put the schema back to version 1, keeping its data.
-        await pool.query(`DROP TABLE ${s}.journal_lines, ${s}.journal_entries, ${s}.events`)
         await pool.query(
-          `DROP FUNCTION ${s}.journal_entry_balanced, ${s}.journal_line_balanced, ${s}.journal_check_entry, ${s}.journal_append_only, ${s}.events_append_only`,
+          `DROP TABLE ${s}.expectation_reference_index, ${s}.journal_period_actions, ${s}.journal_lines, ${s}.journal_entries, ${s}.events`,
+        )
+        await pool.query(
+          `DROP FUNCTION ${s}.journal_entry_balanced, ${s}.journal_line_balanced, ${s}.journal_check_entry, ${s}.journal_append_only, ${s}.events_append_only, ${s}.journal_period_actions_append_only`,
         )
         await pool.query(`DELETE FROM ${s}.migrations WHERE version > 1`)
         await store.migrate()
         expect((await store.getMovement('t', movement.id))!.amount.toString()).toBe('10.0000000')
         expect(await store.listJournalEntries({ tenantId: 't' })).toEqual([])
         expect(await store.listEvents({ tenantId: 't' })).toEqual([])
+      })
+
+      it('backfills the text-memo index when upgrading a database with existing rows', async () => {
+        const store = await freshStore()
+        const s = `"${schemas[schemas.length - 1]!}"`
+        const e = await store.transaction((tx) =>
+          tx.insertExpectation({
+            tenantId: 't',
+            reference: 'INV-9',
+            account: `G${'A'.repeat(55)}`,
+            amount: Money.parse('10', NATIVE),
+            memo: { type: 'text', value: 'REF-8' },
+          }),
+        )
+        await pool.query(`DROP TABLE ${s}.expectation_reference_index`)
+        await pool.query(`DELETE FROM ${s}.migrations WHERE version >= 5`)
+        await store.migrate()
+        const ids = async (key: string) =>
+          (await store.getExpectationsByNormalizedReference('t', key)).map((x) => x.id)
+        expect(await ids('9')).toEqual([e.id])
+        expect(await ids('8')).toEqual([e.id])
+        expect(await ids('')).toEqual([])
       })
     })
 

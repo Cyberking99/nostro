@@ -1,5 +1,4 @@
 import type { JournalEntry } from '../model/index.js'
-import type { Store } from '../store/index.js'
 import { journalCsvCell, journalCsvRow, journalEntries } from './csv.js'
 import type { JournalCsvOptions } from './csv.js'
 

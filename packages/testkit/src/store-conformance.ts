@@ -17,6 +17,7 @@ import {
   ValidationError,
   asset,
   doctor,
+  normalizeReference,
   reconcile,
   sweepExpectations,
 } from '@nostro-labs/nostro'
@@ -284,6 +285,43 @@ export function describeStoreConformance(name: string, makeStore: () => Store | 
         expect((await store.getExpectationByReference(T, 'INV-001'))!.id).toBe(e.id)
         expect((await store.getExpectationByReference(T2, 'INV-001'))!.id).toBe(other.id)
         expect(await store.getExpectationByReference(T, 'INV-404')).toBeNull()
+      })
+
+      it('finds expectations by normalised reference or requested memo, even once settled', async () => {
+        const e = await store.transaction((tx) =>
+          tx.insertExpectation({
+            tenantId: T,
+            reference: 'INV-7',
+            account: ACCOUNT,
+            amount: usdc('10'),
+            memo: { type: 'text', value: 'REF-8' },
+          }),
+        )
+        const ids = async (key: string, tenantId = T) =>
+          (await store.getExpectationsByNormalizedReference(tenantId, key)).map((x) => x.id)
+
+        expect(await ids(normalizeReference('inv 7'))).toEqual([e.id])
+        expect(await ids(normalizeReference('ref #8'))).toEqual([e.id])
+        expect(await ids(normalizeReference('INV-404'))).toEqual([])
+        expect(await ids('')).toEqual([])
+        expect(await ids(normalizeReference('inv 7'), T2)).toEqual([])
+
+        const payment = await record({ amount: usdc('10') })
+        await store.transaction((tx) =>
+          tx.allocate({
+            tenantId: T,
+            movementId: payment.id,
+            expectationId: e.id,
+            amount: usdc('10'),
+            strategy: 'manual',
+          }),
+        )
+        expect((await store.getExpectation(T, e.id))!.status).toBe('settled')
+        expect(await ids(normalizeReference('inv #7'))).toEqual([e.id])
+
+        // Normalised keys collide: the lookup offers every expectation, not one.
+        const collision = await expect10('7')
+        expect(await ids(normalizeReference('INV-7'))).toEqual([e.id, collision.id])
       })
 
       it('finds match candidates by account, asset, direction, status and muxed id', async () => {

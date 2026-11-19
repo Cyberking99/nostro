@@ -8,7 +8,9 @@ randomness, and every decision records its reasons as evidence.
 
 1. **Fees are never matched.** They are ignored with a reason and belong to the journal as expense.
 2. **Every strategy scores every candidate.** Candidates are the account's open and part-paid
-   expectations in the same direction, plus any expectation whose muxed id the movement carries.
+   expectations in the same direction, plus any expectation (settled included) whose muxed id the
+   movement carries or whose normalised reference or requested text memo equals the movement's
+   normalised text memo. This is what catches a second payment quoting a settled invoice.
 3. **Scores combine by family.** Within a family only the strongest signal counts; across families
    they combine as `1 − Π(1 − sᵢ)`. A muxed id and a memo both identify the expectation, so finding
    both is not twice the evidence. A memo plus a unique amount is.
@@ -24,14 +26,33 @@ randomness, and every decision records its reasons as evidence.
 |---|---|---|---|---|
 | `muxed_id` | identifier | 1.00 | paid to the `M…` address issued for the expectation | none if ids are issued uniquely |
 | `memo_id` | identifier | 0.95 | `MEMO_ID` equals the memo id asked for, or the expectation's muxed id | payer typo or a reused old invoice id |
+| `memo_hash` | identifier | 0.95 | `MEMO_HASH` equals the 64-hex hash asked for, compared exactly | payer typo or a reused old hash |
 | `memo_text` | identifier | 0.85 | normalised text memo equals the normalised reference or requested memo | normalisation is deliberately loose |
+| `memo_cross_type` | identifier | 0.75 | id memo sent for a text reference, or text memo sent for an id; see below | any integer reference that happens to equal a pending memo id |
 | `memo_contained` | identifier | 0.60 | a text memo contains the reference as a token or inside a longer normalised run | a memo that merely quotes the reference |
+| `memo_truncated` | identifier | 0.60 | a 28-byte text memo is a proper prefix of the normalised reference | long references often share a prefix; corroboration only |
 | `memo_near_miss` | identifier | 0.50 | a text-memo token is one edit from the reference after normalisation | a different reference one character away |
 | `exact_amount` | amount | 0.60 unique / 0.20 shared | exactly the amount still owed, same asset, inside the window | any two invoices for the same amount |
+| `known_payer` | payer | 0.40 | `counterparty` is an account listed in `payers` | accounts are shared and reused; corroboration only, never an identifier |
 
 **An amount alone never settles anything:** 0.60 is below the 0.70 threshold, so a unique-amount match
 without a memo becomes a suggestion in the exceptions queue. Lowering `threshold` changes that, and
 should be a deliberate decision.
+
+### Cross-type memo matching (`memo_cross_type`)
+
+Payers often send the right reference in the wrong kind of memo field. This strategy covers two cases:
+
+- **Id memo for a text reference.** The payer sends `MEMO_ID 1042` for `INV-1042`. The id is
+  converted to its decimal string (`"1042"`) and compared against the expectation's normalised
+  reference and any normalised text memo it asked for.
+- **Text memo for an id expectation.** The expectation asked for `MEMO_ID 9001`, or the account
+  carries `muxedId 9001`, and the payer typed `"9001"` as a text memo. The normalised text is
+  compared against the decimal string of the requested id and of the muxed id.
+
+Leading zeros keep their meaning: `MEMO_ID 123` never matches reference `00123`, because the payer
+who meant that would have sent the text `"00123"`. Hash and return memos are not candidates for
+cross-type matching.
 
 `memo_contained` and `memo_near_miss` are corroborating identifier signals. Both use
 `normalizeReference`, skip a memo equal to the reference or the requested memo, and require a reference
@@ -50,6 +71,12 @@ upper-cased, `INVOICE` / `INV` / `REF` / `NO` / `#` prefixes dropped at a word b
 dropped). `INV-00123`, `inv #00123`, `Invoice 00123` and `ＩＮＶ００１２３` are the same reference;
 `INVENTORY-5` keeps its word, and `00123` is not `123`.
 
+A wallet cuts a text memo at 28 **bytes**, so a long reference can arrive as a prefix. A cut inside
+a multi-byte character may decode as U+FFFD and appear longer than 28 bytes; that is treated as the
+same signal. It is scored 0.60: alone it raises `MEMO_TRUNCATED` naming the likely expectation, two
+candidates sharing the prefix stay `AMBIGUOUS_MATCH`, and a unique exact amount takes it to 0.84 so
+the payment settles.
+
 To add a strategy, see [CONTRIBUTING](../CONTRIBUTING.md#adding-a-matching-strategy).
 
 ## Outcomes
@@ -62,9 +89,12 @@ To add a strategy, see [CONTRIBUTING](../CONTRIBUTING.md#adding-a-matching-strat
 | Matched, but in another asset (incl. same code, other issuer) | `exception` | `WRONG_ASSET` |
 | Matched, but paid after the expectation expired | `exception` | `LATE_BEYOND_WINDOW` |
 | Best candidate below 0.70, or two within 0.15 | `exception` | `AMBIGUOUS_MATCH` |
+| Best evidence is a 28-byte prefix of one reference | `exception` | `MEMO_TRUNCATED` |
 | Credit with no memo or muxed id, while something is owed | `exception` | `MEMO_MISSING` |
 | Credit with no memo or muxed id, nothing owed | `exception` | `UNEXPECTED_CREDIT` |
 | Credit whose memo or muxed id matches nothing | `exception` | `UNMATCHED_NO_CANDIDATE` |
+| Credit with a return memo (refund signal) | `exception` | `MEMO_MALFORMED` |
+| Credit with a text memo that normalises to nothing (`INV`, `#`) | `exception` | `MEMO_MALFORMED` |
 | Credit whose source enrichment is missing | `exception` | `ENRICHMENT_MISSING` |
 | Debit that matches no payout | `exception` | `UNEXPECTED_DEBIT` |
 | Network fee | `ignored` | none |
@@ -165,16 +195,11 @@ already carrying the exception or lost to a race with payment or cancellation.
 
 These are known gaps, each planned as its own self-contained piece of work:
 
-- **Truncated text memos.** A reference longer than 28 bytes of UTF-8 is cut by the wallet; nostro does
-  not yet detect truncation or prefix-match it.
-- **`MEMO_HASH` references**, for references too long for a text memo.
-- **Known-payer corroboration**, scoring a payment from an account registered as the payer.
 - **Amount fingerprints**, a unique sub-unit suffix per invoice for payers who cannot send memos.
 - **Claimable balances** as a two-step create-then-claim lifecycle.
 - **Several payments in one transaction** sharing a memo.
 - **Slippage tolerance** for path payments delivering slightly less than asked.
 - **One payment covering several invoices** with no per-invoice reference. Today this is an
   exception for a person to split.
-- **A second payment quoting a settled invoice's text reference** is raised as
-  `UNMATCHED_NO_CANDIDATE` rather than `DUPLICATE_PAYMENT`: settled expectations are only found again
-  through a muxed id.
+- **Return memos on credits.** A `MEMO_RETURN` currently raises `MEMO_MALFORMED`. Pairing it with
+  the original payment is left for the refunds work (#15).

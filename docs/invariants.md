@@ -74,8 +74,13 @@ Not covered yet:
 - **Issuer accounts.** The chain shows no balance for an asset the account issues; those checks come
   back as `issuer` and attest nothing.
 - **Liquidity pool shares** are skipped, as nostro does not record them as movements.
-- **History Horizon no longer keeps.** Ingest from the start of an account's history needs Horizon to
-  still have it (ADR 0006). For an older account the check will report a mismatch.
+- **History Horizon no longer keeps, is now reported at ingest.** An ascending read from before
+  Horizon's retention window starts at the first record it still has. `sync()` detects that — a
+  stored cursor whose ledger is older than `history_elder_ledger`, or a first sync whose effects do
+  not begin with `account_created` — and opens one `SOURCE_GAP_DETECTED` exception with both ledgers
+  as evidence, in the same transaction as the cursor. Ingest carries on with the records Horizon
+  does have, so the gap waits for a person instead of surfacing later as `balance_mismatch`. Checking
+  the root is a deliberate network call made only when the page looks like it crossed a window.
 
 ## In CI and against the real network
 

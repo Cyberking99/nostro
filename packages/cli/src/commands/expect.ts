@@ -8,6 +8,7 @@ import { expectationWithPaid, money } from '../format.js'
 import { clean, json, write } from '../io.js'
 
 const UINT64 = /^\d{1,20}$/
+const HASH = /^[0-9a-f]{64}$/
 const UINT64_MAX = (1n << 64n) - 1n
 
 function uint64(args: Args, name: string): bigint | undefined {
@@ -29,8 +30,16 @@ function assetOf(raw: string): AssetId {
 function memoOf(args: Args): Memo | null {
   const text = string(args, 'memo-text')
   const id = uint64(args, 'memo-id')
+  const hash = string(args, 'memo-hash')
   if (text !== undefined && id !== undefined) throw new UsageError('Give --memo-text or --memo-id, not both.')
+  if (hash !== undefined && (text !== undefined || id !== undefined)) {
+    throw new UsageError('Give --memo-hash on its own, not with --memo-text or --memo-id.')
+  }
   if (id !== undefined) return { type: 'id', value: id }
+  if (hash !== undefined) {
+    if (!HASH.test(hash)) throw new UsageError('--memo-hash must be exactly 64 lowercase hex characters.')
+    return { type: 'hash', value: hash }
+  }
   if (text === undefined) return null
   // What the payer is asked to send has to fit in a transaction.
   if (text === '' || Buffer.byteLength(text, 'utf8') > 28) {
@@ -66,6 +75,7 @@ Options:
   --issue-muxed-id    Issue the next free muxed id for this account
   --memo-text <text>  The text memo you asked the payer to send, if not the reference
   --memo-id <n>       The id memo you asked the payer to send
+  --memo-hash <hex>   The 64 lowercase hex characters of the hash memo you asked for
   --payer <G...>      An account known to pay this; corroborates, never settles alone. Repeatable
   --due <date>        When it is due
   --expires <date>    After this a payment no longer settles it
@@ -83,6 +93,7 @@ Dates are 2026-10-31 (midnight UTC) or an instant with its offset, 2026-10-31T17
     'issue-muxed-id': { type: 'boolean' },
     'memo-text': { type: 'string' },
     'memo-id': { type: 'string' },
+    'memo-hash': { type: 'string' },
     payer: { type: 'string', multiple: true },
     due: { type: 'string' },
     expires: { type: 'string' },

@@ -16,12 +16,13 @@
  * it again for the next batch.
  *
  * Candidates are the account's open and part-paid expectations in the same
- * direction, plus any expectation (whatever its status) whose muxed id the
- * movement carries in its address or its memo id, so a second payment to a
- * settled invoice's muxed address is caught as a duplicate. A second payment
- * quoting a settled invoice's text reference finds no open candidate and is
- * raised as unmatched instead: still a person's job, under a less specific
- * code.
+ * direction, plus any expectation (whatever its status, except cancelled)
+ * whose muxed id the movement carries in its address or its memo id, and any
+ * expectation whose normalised reference or requested text memo equals the
+ * movement's normalised text memo. The last two find settled invoices too, so
+ * a second payment is caught as DUPLICATE_PAYMENT whether the payer used the
+ * muxed address or quoted the reference again. Settled candidates have nothing
+ * owing, which the engine already refuses; no engine change is needed.
  */
 import type { PostOptions } from '../journal/index.js'
 import { postMovement } from '../journal/index.js'
@@ -31,6 +32,7 @@ import { sumAmounts } from '../store/index.js'
 import type { DecideOptions } from './engine.js'
 import { decide } from './engine.js'
 import type { Candidate } from './types.js'
+import { normalizeReference } from './reference.js'
 
 export interface ReconcileOptions extends DecideOptions, PostOptions {
   readonly store: Store
@@ -68,6 +70,10 @@ async function candidatesFor(tx: StoreTx, movement: Movement): Promise<Candidate
   add(await tx.listExpectations({ tenantId, account, direction, status: ['open', 'partially_paid'] }))
   if (movement.muxedId !== null) add(await tx.listExpectations({ tenantId, muxedId: movement.muxedId }))
   if (movement.memo?.type === 'id') add(await tx.listExpectations({ tenantId, muxedId: movement.memo.value }))
+  if (movement.memo?.type === 'text') {
+    const normalized = normalizeReference(movement.memo.value)
+    if (normalized !== '') add(await tx.getExpectationsByNormalizedReference(tenantId, normalized))
+  }
 
   const candidates: Candidate[] = []
   for (const expectation of found.values()) {

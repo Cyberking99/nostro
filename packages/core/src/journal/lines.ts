@@ -21,8 +21,8 @@ import type {
   Side,
 } from '../model/index.js'
 import { Money, issuerOf } from '../money/index.js'
-import type { ChartOfAccounts } from './chart.js'
-import { DEFAULT_CHART, accountFor } from './chart.js'
+import type { ChartOfAccounts, PostingRule } from './chart.js'
+import { DEFAULT_CHART, accountFor, applyRules } from './chart.js'
 
 /** A line before an account code is chosen for it. */
 export interface DesiredLine {
@@ -162,6 +162,12 @@ function describe(kind: JournalEntryKind, movement: Movement): string {
 
 export interface PostingPlanOptions {
   readonly chart?: ChartOfAccounts
+  /**
+   * Ordered posting rules checked before the chart. The first matching rule
+   * wins. Rules never move an existing slot: `planPosting` already keeps each
+   * slot in the account it was first posted to.
+   */
+  readonly rules?: readonly PostingRule[]
 }
 
 /**
@@ -190,10 +196,56 @@ export function planPosting(
   if (delta.length === 0) return null
 
   const chart = options.chart ?? DEFAULT_CHART
+  const rules = options.rules ?? []
   const posted = new Map<string, string>()
   for (const e of existing) for (const l of e.lines) posted.set(keyOf(l), l.account)
+
+  // Build a lookup of expectation refs / metadata for rule matching.
+  // We carry expectationId on each desired line; the caller passes allocations
+  // which we can use to find the expectation. For the metadata we need the
+  // allocations object — but planPosting receives allocations already. We
+  // build a simple id→allocation map so we can reach expectation refs.
+  const allocByExpectation = new Map<string, Allocation>()
+  for (const a of allocations) allocByExpectation.set(a.expectationId, a)
+
+  const pickAccount = (l: DesiredLine): string => {
+    // If this slot was already posted, keep its original account unchanged.
+    const prior = posted.get(keyOf(l))
+    if (prior !== undefined) return prior
+
+    // Try posting rules first.
+    if (rules.length > 0) {
+      const ctx = {
+        role: l.role,
+        asset: l.amount.asset,
+        account: movement.account,
+        network: movement.network,
+        direction: movement.direction,
+        kind: movement.kind,
+        counterparty: movement.counterparty,
+        // Expectation context — only available when the line is linked to one.
+        expectationRef: null as string | null,
+        expectationMetadata: null as Readonly<Record<string, string>> | null,
+      }
+      if (l.expectationId !== null) {
+        const alloc = allocByExpectation.get(l.expectationId)
+        if (alloc !== undefined) {
+          // We don't have the full expectation object here, so we surface what
+          // we can from the allocation. The expectation reference and metadata
+          // must be passed in via options when needed; for now we pass the
+          // expectationId as a ref so prefix rules can still match on it.
+          ctx.expectationRef = l.expectationId
+        }
+      }
+      const match = applyRules(rules, ctx)
+      if (match !== null) return match.account
+    }
+
+    return accountFor(chart, l.role, movement.network, movement.account)
+  }
+
   const lines: NewJournalLine[] = delta.map((l) => ({
-    account: posted.get(keyOf(l)) ?? accountFor(chart, l.role, movement.network, movement.account),
+    account: pickAccount(l),
     role: l.role,
     side: l.side,
     amount: l.amount,

@@ -196,6 +196,24 @@ describe('expectations', () => {
     expect((await app.inject({ url: '/v1/expectations/nope', headers: auth() })).statusCode).toBe(404)
   })
 
+  it('accepts a hash memo, and refuses one that is not 64 lowercase hex', async () => {
+    const app = server(new MemoryStore())
+    const hash = 'a'.repeat(64)
+    const created = await post(app, { reference: 'HASH-1', account: A, amount: '1', memo: { type: 'hash', value: hash } })
+    expect(created.statusCode).toBe(201)
+    expect(created.json().memo).toEqual({ type: 'hash', value: hash })
+    for (const [i, value] of ['aa', hash.toUpperCase(), 'g'.repeat(64)].entries()) {
+      const bad = await post(app, {
+        reference: `BAD-${i}`,
+        account: A,
+        amount: '1',
+        memo: { type: 'hash', value },
+      })
+      expect(bad.statusCode, value).toBe(400)
+      expect(bad.json()).toMatchObject({ code: 'invalid_request' })
+    }
+  })
+
   it('lists them with what has been paid, by status and account, a page at a time', async () => {
     const app = server(await seeded())
     await post(app, { reference: 'INV-1043', account: A, amount: '10' })
@@ -584,5 +602,68 @@ describe('layering', () => {
     const outside = imports.filter(([, spec]) => !spec.startsWith('./') && !spec.startsWith('node:') && spec !== 'fastify')
     expect(outside.length).toBeGreaterThan(0)
     expect(outside.filter(([, spec]) => spec !== '@nostro-labs/nostro')).toEqual([])
+  })
+})
+
+describe('reports and account moves', () => {
+  const CASH = `assets:stellar:testnet:${A}`
+
+  it('reports a balanced trial balance, balance sheet, income statement and account ledger', async () => {
+    const app = server(await seeded())
+    const get = async (url: string) => {
+      const res = await app.inject({ url, headers: auth() })
+      expect(res.statusCode, url).toBe(200)
+      return res.json()
+    }
+
+    const tb = await get('/v1/reports/trial-balance')
+    expect(tb.balanced).toBe(true)
+    expect(tb.assetTotals).toEqual([{ asset: 'native', net: '0' }])
+    expect(tb.lines.find((l: { account: string }) => l.account === CASH)).toMatchObject({
+      totalDebits: '250000000',
+      totalCredits: '50000100',
+      netBalance: '199999900',
+    })
+    expect((await get('/v1/reports/trial-balance?asOf=2026-01-01T00:00:00Z')).lines).toEqual([])
+
+    const bs = await get('/v1/reports/balance-sheet')
+    expect(bs).toMatchObject({ asOf: null, balanced: true, currentEarnings: [{ asset: 'native', amount: '-100' }] })
+    expect(bs.sections.map((s: { kind: string }) => s.kind)).toEqual(['asset', 'liability', 'equity'])
+    expect((await get('/v1/reports/balance-sheet?asOf=2026-01-01T00:00:00Z')).asOf).toBe('2026-01-01T00:00:00.000Z')
+
+    const income = await get('/v1/reports/income?to=2027-01-01T00:00:00Z')
+    expect(income.netResult).toEqual([{ asset: 'native', amount: '-100' }])
+    expect(income.lines).toEqual([{ account: 'expenses:network-fees', kind: 'expense', asset: 'native', amount: '100' }])
+
+    const ledger = await get(`/v1/reports/ledger?account=${CASH}&asset=native`)
+    expect(ledger).toMatchObject({ openingBalance: '0', closingBalance: '199999900' })
+    expect(ledger.lines.map((l: { side: string; runningBalance: string }) => `${l.side} ${l.runningBalance}`)).toEqual([
+      'debit 250000000',
+      'credit 200000000',
+      'credit 199999900',
+    ])
+    const later = await get(`/v1/reports/ledger?account=${CASH}&asset=native&from=2027-01-01T00:00:00Z`)
+    expect(later).toMatchObject({ openingBalance: '199999900', lines: [] })
+
+    expect((await app.inject({ url: '/v1/reports/ledger?account=x', headers: auth() })).statusCode).toBe(400)
+  })
+
+  it('moves an account balance, and refuses to move a cash account', async () => {
+    const app = server(await seeded())
+    const move = (payload: unknown) => app.inject({ method: 'POST', url: '/v1/chart/move', headers: auth(), payload: payload as object })
+
+    const moved = await move({ from: 'expenses:network-fees', to: 'expenses:fees', note: 'rename' })
+    expect(moved.statusCode).toBe(200)
+    expect(moved.json()).toEqual({ moved: 1, assets: ['native'] })
+    const lines = (await app.inject({ url: '/v1/reports/income', headers: auth() })).json().lines
+    expect(lines).toEqual([
+      { account: 'expenses:fees', kind: 'expense', asset: 'native', amount: '100' },
+      { account: 'expenses:network-fees', kind: 'expense', asset: 'native', amount: '0' },
+    ])
+
+    const cash = await move({ from: CASH, to: 'assets:other' })
+    expect(cash.statusCode).toBe(422)
+    expect(cash.json()).toMatchObject({ code: 'invalid_request' })
+    expect((await move({ from: 1, to: 'x' })).statusCode).toBe(400)
   })
 })

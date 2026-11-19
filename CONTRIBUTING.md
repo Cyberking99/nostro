@@ -42,8 +42,25 @@ are testable with no network and no database.
 ## Recording fixtures
 
 Fixtures are real Horizon responses; see [`fixtures/horizon/README.md`](./fixtures/horizon/README.md)
-for how they were captured and what each file holds. A recorder that captures them automatically is
-planned. Every bug fix should arrive with the fixture that reproduces it.
+for what each file holds. Record one with:
+
+```bash
+pnpm build
+node scripts/record-fixture.mjs <operation-id> --scenario <name> [--testnet]
+```
+
+This fetches `/operations/{id}?join=transactions` and every page of that operation's effects, strips
+`_links` and nothing else, and writes `fixtures/horizon/pubnet/<name>.json` (or `testnet/<name>.json`
+with `--testnet`). It refuses to overwrite an existing fixture. Every bug fix should arrive with the
+fixture that reproduces it.
+
+In tests, `FixtureSource` (from `nostro-testkit`) replays a captured fixture through the normaliser
+as a `MovementSource`, so a real record can be ingested in a few lines:
+
+```ts
+const source = new FixtureSource({ fixture: new URL('payment-text-memo.json', dir) })
+const { movements } = await source.pull({ tenantId, account, cursor: null, limit: 100 })
+```
 
 ## Claiming an issue
 

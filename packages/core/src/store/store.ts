@@ -110,6 +110,14 @@ export interface StoreReader extends JournalReader {
   listMovements(query: MovementQuery): Promise<Movement[]>
   getExpectation(tenantId: string, id: string): Promise<Expectation | null>
   getExpectationByReference(tenantId: string, reference: string): Promise<Expectation | null>
+  /**
+   * Find expectations indexed under a normalised reference key: the key is
+   * compared with both the normalised `reference` and the normalised requested
+   * text memo. Several expectations can share a key, so this returns a list.
+   * Settled and cancelled expectations are included; the caller decides what
+   * a match means. An empty key matches nothing.
+   */
+  getExpectationsByNormalizedReference(tenantId: string, key: string): Promise<Expectation[]>
   listExpectations(query: ExpectationQuery): Promise<Expectation[]>
   listAllocations(query: AllocationQuery): Promise<Allocation[]>
   getException(tenantId: string, id: string): Promise<ExceptionRecord | null>
@@ -195,6 +203,8 @@ export interface StoreTx extends StoreReader, JournalTx {
 export interface JournalQuery {
   readonly tenantId: string
   readonly movementId?: string
+  /** Filter lines to this account code (matches any entry that has at least one line on this account). */
+  readonly account?: string
   /** Entries with `seq` greater than this, for paging in posting order. */
   readonly afterSeq?: number
   /** Effective on or after this instant. */

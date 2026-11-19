@@ -70,6 +70,7 @@ import {
   issueMuxedId,
   expectationAmended,
   expectationChanged,
+  expectationReferenceKeys,
   movementDecided,
   parseAsset,
   sameFacts,
@@ -119,6 +120,11 @@ function memoColumns(memo: Memo | null | undefined): [string | null, string | nu
   if (memo == null) return [null, null, null]
   if (memo.type === 'text') return ['text', null, Buffer.from(memo.value, 'utf8')]
   return [memo.type, String(memo.value), null]
+}
+
+/** One index row per normalised reference/memo key, for the text-memo lookup. */
+function referenceIndexRows(id: string, tenantId: string, reference: string, memo: Memo | null): [string, string, string][] {
+  return expectationReferenceKeys(reference, memo).map((normalized) => [tenantId, normalized, id])
 }
 
 function memoOf(r: Row): Memo | null {
@@ -312,6 +318,17 @@ class SqliteReader implements StoreReader {
   async getExpectationByReference(tenantId: string, reference: string): Promise<Expectation | null> {
     const row = this.one('SELECT * FROM expectations WHERE tenant_id = ? AND reference = ?', [tenantId, reference])
     return row === undefined ? null : toExpectation(row)
+  }
+
+  async getExpectationsByNormalizedReference(tenantId: string, normalized: string): Promise<Expectation[]> {
+    if (normalized === '') return []
+    return this.all(
+      `SELECT e.* FROM expectation_reference_index k
+         JOIN expectations e ON e.id = k.expectation_id
+        WHERE k.tenant_id = ? AND k.normalized = ?
+        ORDER BY e.seq`,
+      [tenantId, normalized],
+    ).map(toExpectation)
   }
 
   async listExpectations(q: ExpectationQuery): Promise<Expectation[]> {
@@ -590,36 +607,40 @@ class SqliteTx extends SqliteReader implements StoreTx {
     }
     const [memoType, memoValue, memoText] = memoColumns(n.memo)
     const now = this.now().getTime()
-    return toExpectation(
-      this.one(
-        `INSERT INTO expectations (
-           id, tenant_id, reference, account, direction, asset, decimals, amount, muxed_id,
-           memo_type, memo_value, memo_text, payers, due_at, expires_at, status, metadata,
-           created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
-         RETURNING *`,
-        [
-          this.ids(),
-          n.tenantId,
-          n.reference,
-          n.account,
-          n.direction ?? 'credit',
-          n.amount.asset,
-          n.amount.decimals,
-          n.amount.raw.toString(),
-          muxedId == null ? null : muxedId.toString(),
-          memoType,
-          memoValue,
-          memoText,
-          JSON.stringify(n.payers ?? []),
-          ms(n.dueAt),
-          ms(n.expiresAt),
-          JSON.stringify(n.metadata ?? {}),
-          now,
-          now,
-        ],
-      )!,
+    const id = this.ids()
+    const row = this.one(
+      `INSERT INTO expectations (
+         id, tenant_id, reference, account, direction, asset, decimals, amount, muxed_id,
+         memo_type, memo_value, memo_text, payers, due_at, expires_at, status, metadata,
+         created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
+       RETURNING *`,
+      [
+        id,
+        n.tenantId,
+        n.reference,
+        n.account,
+        n.direction ?? 'credit',
+        n.amount.asset,
+        n.amount.decimals,
+        n.amount.raw.toString(),
+        muxedId == null ? null : muxedId.toString(),
+        memoType,
+        memoValue,
+        memoText,
+        JSON.stringify(n.payers ?? []),
+        ms(n.dueAt),
+        ms(n.expiresAt),
+        JSON.stringify(n.metadata ?? {}),
+        now,
+        now,
+      ],
+    )!
+    const index = this.db.prepare(
+      'INSERT OR IGNORE INTO expectation_reference_index (tenant_id, normalized, expectation_id) VALUES (?, ?, ?)',
     )
+    for (const values of referenceIndexRows(id, n.tenantId, n.reference, n.memo ?? null)) index.run(...values)
+    return toExpectation(row)
   }
 
   async cancelExpectation(tenantId: string, id: string, reason: string): Promise<Expectation> {
@@ -668,6 +689,11 @@ class SqliteTx extends SqliteReader implements StoreTx {
         ],
       )!,
     )
+    this.db.prepare('DELETE FROM expectation_reference_index WHERE expectation_id = ?').run(e.id)
+    const index = this.db.prepare(
+      'INSERT OR IGNORE INTO expectation_reference_index (tenant_id, normalized, expectation_id) VALUES (?, ?, ?)',
+    )
+    for (const values of referenceIndexRows(saved.id, saved.tenantId, saved.reference, saved.memo)) index.run(...values)
     this.emit(expectationAmended(saved, e, reason))
     return saved
   }
@@ -843,6 +869,27 @@ export class SqliteStore extends SqliteReader implements MigratableStore {
     return run
   }
 
+  /**
+   * Fill the text-memo index for expectations written before migration 6.
+   * Runs inside `migrate()`'s transaction, and is idempotent so a database
+   * rolled back to version 1 and re-migrated does not double-index anything.
+   */
+  private backfillReferenceIndex(): void {
+    const rows = this.writer
+      .prepare('SELECT id, tenant_id, reference, memo_type, memo_text FROM expectations')
+      .all() as { id: string; tenant_id: string; reference: string; memo_type: string | null; memo_text: Buffer | null }[]
+    const insert = this.writer.prepare(
+      'INSERT OR IGNORE INTO expectation_reference_index (tenant_id, normalized, expectation_id) VALUES (?, ?, ?)',
+    )
+    for (const row of rows) {
+      const memo: Memo | null =
+        row.memo_type === 'text' ? { type: 'text', value: (row.memo_text ?? Buffer.alloc(0)).toString('utf8') } : null
+      for (const normalized of expectationReferenceKeys(row.reference, memo)) {
+        insert.run(row.tenant_id, normalized, row.id)
+      }
+    }
+  }
+
   /** Apply any pending migrations. Safe to call from several processes at once. */
   migrate(): Promise<void> {
     return this.serial(async () => {
@@ -851,6 +898,7 @@ export class SqliteStore extends SqliteReader implements MigratableStore {
         this.writer.exec(MIGRATIONS[v - 1]!)
         this.writer.pragma(`user_version = ${v}`)
       }
+      if (version < 6) this.backfillReferenceIndex()
     })
   }
 

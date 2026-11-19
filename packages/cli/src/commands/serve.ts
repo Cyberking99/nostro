@@ -6,9 +6,9 @@ import type { Store } from '@nostro-labs/nostro'
 import { MIN_WEBHOOK_SECRET_LENGTH, StreamWatcher, deliverWebhooks, sweepExpectations } from '@nostro-labs/nostro'
 import { apiKeys, createServer } from '@nostro-labs/server'
 import type { Args } from '../args.js'
-import { CliError, NETWORK, UsageError, accounts, database, flag, integer, network, positionals, string, strings, tenant } from '../args.js'
+import { CliError, NETWORK, RATE_LIMIT, UsageError, accounts, database, flag, integer, network, positionals, rateLimit, string, strings, tenant } from '../args.js'
 import type { Command } from '../command.js'
-import { NETWORK_HELP, horizonClient, movementSources } from '../command.js'
+import { NETWORK_HELP, RATE_LIMIT_HELP, horizonClient, movementSources } from '../command.js'
 import type { Io } from '../io.js'
 import { clean, write } from '../io.js'
 import { assertCurrent, openStore, redact } from '../store.js'
@@ -68,6 +68,7 @@ Options:
   --webhook-url <url> Deliver events here (env NOSTRO_WEBHOOK_URL); the secret comes only from
                       NOSTRO_WEBHOOK_SECRET
 ${NETWORK_HELP}
+${RATE_LIMIT_HELP}
   --db <path|url>     SQLite file, or a postgres:// URL (env NOSTRO_DB; default ./nostro.db)
   --tenant <id>       The tenant the watched accounts belong to (env NOSTRO_TENANT; default "default")
   -h, --help          Show this help
@@ -82,6 +83,7 @@ SSE accelerator (--sse):
     tenant: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
     ...NETWORK,
+    ...RATE_LIMIT,
     port: { type: 'string' },
     host: { type: 'string' },
     'keys-file': { type: 'string' },
@@ -135,7 +137,7 @@ SSE accelerator (--sse):
           )
         }
         if (hook !== null) await write(io.stdout, `Delivering tenant ${clean(tenantId)}'s events to ${redact(hook.url)}.\n`)
-        const sources = net === null ? [] : movementSources(horizonClient(net, io), net)
+        const sources = net === null ? [] : movementSources(horizonClient(net, io, rateLimit(args)), net)
 
         // SSE accelerator: wakes the loop early when new ledgers arrive.
         // Off by default (ADR 0005); enabled with --sse.

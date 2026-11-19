@@ -68,6 +68,7 @@ import {
 import { ConstraintError, NotFoundError, TransactionClosedError } from './store.js'
 import type { EventQuery, NewOutboxEvent, OutboxEvent } from './events.js'
 import { exceptionChanged, expectationAmended, expectationChanged, movementDecided } from './events.js'
+import { expectationReferenceKeys } from '../matching/reference.js'
 
 export interface MemoryStoreOptions {
   /** Id generator. Defaults to `crypto.randomUUID()`; inject one for deterministic tests. */
@@ -84,6 +85,8 @@ interface State {
   readonly expectations: Map<string, Expectation>
   /** (tenant, reference) → expectation id. */
   readonly expectationRefs: Map<string, string>
+  /** (tenant, normalised key) → expectation ids. A key can name several invoices. */
+  readonly expectationKeys: Map<string, readonly string[]>
   readonly allocations: Map<string, Allocation>
   readonly exceptions: Map<string, ExceptionRecord>
   readonly cursors: Map<string, string>
@@ -110,6 +113,7 @@ function emptyState(): State {
     movementKeys: new Map(),
     expectations: new Map(),
     expectationRefs: new Map(),
+    expectationKeys: new Map(),
     allocations: new Map(),
     exceptions: new Map(),
     cursors: new Map(),
@@ -130,6 +134,7 @@ function cloneState(s: State): State {
     movementKeys: new Map(s.movementKeys),
     expectations: new Map(s.expectations),
     expectationRefs: new Map(s.expectationRefs),
+    expectationKeys: new Map(s.expectationKeys),
     allocations: new Map(s.allocations),
     exceptions: new Map(s.exceptions),
     cursors: new Map(s.cursors),
@@ -147,6 +152,23 @@ const movementKey = (m: { tenantId: string; network: string; source: string; ext
   key(m.tenantId, m.network, m.source, m.externalId)
 const cursorKey = (k: CursorKey) => key(k.tenantId, k.network, k.source, k.account)
 const copyDate = (d: Date): Date => new Date(d.getTime())
+
+const addReferenceKeys = (state: State, e: Expectation): void => {
+  for (const normalized of expectationReferenceKeys(e.reference, e.memo)) {
+    const indexKey = key(e.tenantId, normalized)
+    const ids = state.expectationKeys.get(indexKey) ?? []
+    if (!ids.includes(e.id)) state.expectationKeys.set(indexKey, [...ids, e.id])
+  }
+}
+
+const removeReferenceKeys = (state: State, e: Expectation): void => {
+  for (const normalized of expectationReferenceKeys(e.reference, e.memo)) {
+    const indexKey = key(e.tenantId, normalized)
+    const ids = (state.expectationKeys.get(indexKey) ?? []).filter((id) => id !== e.id)
+    if (ids.length === 0) state.expectationKeys.delete(indexKey)
+    else state.expectationKeys.set(indexKey, ids)
+  }
+}
 
 abstract class MemoryReader implements StoreReader {
   /** The state reads run against: committed state, or a transaction's draft. */
@@ -184,6 +206,17 @@ abstract class MemoryReader implements StoreReader {
     this.check()
     const id = this.snapshot().expectationRefs.get(key(tenantId, reference))
     return id === undefined ? null : (this.snapshot().expectations.get(id) ?? null)
+  }
+
+  async getExpectationsByNormalizedReference(tenantId: string, normalized: string): Promise<Expectation[]> {
+    this.check()
+    if (normalized === '') return []
+    const out: Expectation[] = []
+    for (const id of this.snapshot().expectationKeys.get(key(tenantId, normalized)) ?? []) {
+      const e = this.snapshot().expectations.get(id)
+      if (e !== undefined && e.tenantId === tenantId) out.push(e)
+    }
+    return out.sort((a, b) => a.seq - b.seq)
   }
 
   async listExpectations(q: ExpectationQuery): Promise<Expectation[]> {
@@ -261,6 +294,7 @@ abstract class MemoryReader implements StoreReader {
       if (q.afterSeq !== undefined && e.seq <= q.afterSeq) continue
       if (q.effectiveFrom !== undefined && e.effectiveAt.getTime() < q.effectiveFrom.getTime()) continue
       if (q.effectiveBefore !== undefined && e.effectiveAt.getTime() >= q.effectiveBefore.getTime()) continue
+      if (q.account !== undefined && !e.lines.some((l) => l.account === q.account)) continue
       out.push(e)
     }
     out.sort((a, b) => a.seq - b.seq)
@@ -501,6 +535,7 @@ class MemoryTx extends MemoryReader implements StoreTx {
     })
     this.draft.expectations.set(expectation.id, expectation)
     this.draft.expectationRefs.set(refKey, expectation.id)
+    addReferenceKeys(this.draft, expectation)
     return expectation
   }
 
@@ -534,6 +569,8 @@ class MemoryTx extends MemoryReader implements StoreTx {
     }
     const next = amendExpectationRecord(e, allocations, changes, reason, this.now(), muxedIdTaken)
     this.draft.expectations.set(id, next)
+    removeReferenceKeys(this.draft, e)
+    addReferenceKeys(this.draft, next)
     this.emit(expectationAmended(next, e, reason))
     return next
   }

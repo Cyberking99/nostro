@@ -260,6 +260,22 @@ export const MIGRATIONS: readonly string[] = [
     CREATE TRIGGER journal_period_actions_no_delete BEFORE DELETE ON journal_period_actions
       BEGIN SELECT RAISE(ABORT, 'journal period actions are append-only'); END;
   `,
+  // 6: find a settled invoice from the text memo a payer quoted. Normalising
+  // is done in the application (it is NFKC plus Unicode category removal), so
+  // the keys are computed when an expectation is inserted and when this
+  // migration backfills rows written before the index existed. A key can name
+  // more than one expectation, hence the many-to-many table and no UNIQUE on
+  // (tenant, key) alone.
+  `
+    CREATE TABLE IF NOT EXISTS expectation_reference_index (
+      tenant_id      TEXT NOT NULL,
+      normalized     TEXT NOT NULL,
+      expectation_id TEXT NOT NULL REFERENCES expectations (id),
+      PRIMARY KEY (tenant_id, normalized, expectation_id)
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS expectation_reference_keys
+      ON expectation_reference_index (tenant_id, normalized);
+  `,
   `
     CREATE TABLE exceptions_new (
       seq             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -330,6 +346,8 @@ export const MIGRATIONS: readonly string[] = [
     CREATE TRIGGER events_no_delete BEFORE DELETE ON events
       BEGIN SELECT RAISE(ABORT, 'the event log is append-only'); END;
 
+    DROP TRIGGER IF EXISTS expectations_muxed_id_insert_unique;
+    DROP TRIGGER IF EXISTS expectations_muxed_id_update_unique;
     CREATE TRIGGER expectations_muxed_id_insert_unique BEFORE INSERT ON expectations
       WHEN NEW.muxed_id IS NOT NULL AND EXISTS (
         SELECT 1 FROM expectations

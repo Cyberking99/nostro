@@ -107,6 +107,26 @@ describe('reconcile', () => {
     expect(dup!.expectationId).toBe(muxed.id)
   })
 
+  it('catches a second payment quoting a settled text reference as a duplicate', async () => {
+    const { store, memo } = await invoices()
+    const [first] = await ingest(store, payment({ amount: usdc('25'), memo: { type: 'text', value: 'inv 2' } }))
+    expect((await reconcile({ store, tenantId: T })).allocated).toBe(1)
+    expect((await store.getExpectation(T, memo.id))!.status).toBe('settled')
+
+    const [second] = await ingest(store, payment({ memo: { type: 'text', value: 'INV-2' } }))
+    const report = await reconcile({ store, tenantId: T })
+    expect(report.exceptions).toEqual({ DUPLICATE_PAYMENT: 1 })
+    const [dup] = await store.listExceptions({ tenantId: T, code: 'DUPLICATE_PAYMENT' })
+    expect(dup).toMatchObject({ movementId: second!.id, expectationId: memo.id, status: 'open' })
+    expect(dup!.movementId).not.toBe(first!.id)
+    expect((await store.getMovement(T, second!.id))!.disposition).toBe('exception')
+
+    // The duplicate's residual is owed back to the customer, not unapplied.
+    const roles = (await store.listJournalEntries({ tenantId: T })).flatMap((entry) => entry.lines.map((l) => l.role))
+    expect(roles).toContain('customer_credit')
+    expect(roles).not.toContain('unapplied')
+  })
+
   it('settles one invoice from several part-payments', async () => {
     const { store, memo } = await invoices()
     await ingest(
