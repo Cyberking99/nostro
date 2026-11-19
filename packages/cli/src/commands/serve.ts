@@ -3,10 +3,10 @@ import type { AddressInfo } from 'node:net'
 import { resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { Store } from '@nostro-labs/nostro'
-import { MIN_WEBHOOK_SECRET_LENGTH, deliverWebhooks } from '@nostro-labs/nostro'
+import { MIN_WEBHOOK_SECRET_LENGTH, StreamWatcher, deliverWebhooks } from '@nostro-labs/nostro'
 import { apiKeys, createServer } from '@nostro-labs/server'
 import type { Args } from '../args.js'
-import { CliError, NETWORK, UsageError, accounts, database, integer, network, positionals, string, strings, tenant } from '../args.js'
+import { CliError, NETWORK, UsageError, accounts, database, flag, integer, network, positionals, string, strings, tenant } from '../args.js'
 import type { Command } from '../command.js'
 import { NETWORK_HELP, horizonClient, movementSources } from '../command.js'
 import type { Io } from '../io.js'
@@ -64,12 +64,19 @@ Options:
   --host <address>    Address to listen on (env NOSTRO_HOST; default 127.0.0.1; 0.0.0.0 in a container)
   --keys-file <file>  API keys, one tenant:key per line
   --interval <s>      Seconds between rounds (default 30)
+  --sse               Enable Horizon SSE stream to wake the sync loop early (off by default; ADR 0005)
   --webhook-url <url> Deliver events here (env NOSTRO_WEBHOOK_URL); the secret comes only from
                       NOSTRO_WEBHOOK_SECRET
 ${NETWORK_HELP}
   --db <path|url>     SQLite file, or a postgres:// URL (env NOSTRO_DB; default ./nostro.db)
   --tenant <id>       The tenant the watched accounts belong to (env NOSTRO_TENANT; default "default")
-  -h, --help          Show this help`,
+  -h, --help          Show this help
+
+SSE accelerator (--sse):
+  When enabled, serve opens a Horizon SSE /ledgers?cursor=now stream. Any new ledger event wakes
+  the sync loop early for that round; bursts are coalesced. The timed --interval rounds keep
+  running regardless, so a dropped or stalled stream loses nothing. This is purely an optimisation
+  that reduces worst-case payment latency from --interval seconds toward a few seconds. See ADR 0005.`,
   options: {
     db: { type: 'string' },
     tenant: { type: 'string' },
@@ -79,6 +86,7 @@ ${NETWORK_HELP}
     host: { type: 'string' },
     'keys-file': { type: 'string' },
     interval: { type: 'string' },
+    sse: { type: 'boolean' },
     'webhook-url': { type: 'string' },
   },
   async run(args, io) {
@@ -99,6 +107,7 @@ ${NETWORK_HELP}
     const port = rawPort === undefined ? 8080 : Number(rawPort)
     const host = string(args, 'host') ?? io.env.NOSTRO_HOST ?? '127.0.0.1'
     const interval = integer(args, 'interval', 30, 1, 86_400)
+    const useSse = flag(args, 'sse')
     const watched =
       strings(args, 'account').length > 0 || (io.env.NOSTRO_ACCOUNTS ?? '').trim() !== '' ? accounts(args, io) : []
     const net = watched.length > 0 ? network(args, io) : null
@@ -127,6 +136,22 @@ ${NETWORK_HELP}
         }
         if (hook !== null) await write(io.stdout, `Delivering tenant ${clean(tenantId)}'s events to ${redact(hook.url)}.\n`)
         const sources = net === null ? [] : movementSources(horizonClient(net, io), net)
+
+        // SSE accelerator: wakes the loop early when new ledgers arrive.
+        // Off by default (ADR 0005); enabled with --sse.
+        let watcher: StreamWatcher | null = null
+        let earlyWake: (() => void) | null = null
+
+        if (useSse && net !== null) {
+          await write(io.stdout, `SSE accelerator enabled on ${net.horizon}.\n`)
+          watcher = new StreamWatcher({
+            horizonUrl: net.horizon,
+            onWake: () => { earlyWake?.() },
+            ...(io.fetch === undefined ? {} : { fetch: io.fetch }),
+          })
+          watcher.start()
+        }
+
         while (io.signal?.aborted !== true) {
           try {
             if (net !== null) {
@@ -145,8 +170,30 @@ ${NETWORK_HELP}
           } catch (err) {
             await write(io.stderr, `Round failed: ${clean((err as Error).message)}\n`)
           }
-          await sleep(interval * 1000, undefined, io.signal === undefined ? {} : { signal: io.signal }).catch(() => undefined)
+
+          // Sleep for `interval` seconds, but allow the SSE watcher to wake
+          // us early. The AbortSignal from the outer stop also cancels this.
+          await new Promise<void>((resolve) => {
+            let done = false
+            const finish = () => { if (!done) { done = true; resolve() } }
+
+            const timer = sleep(interval * 1000, undefined, io.signal === undefined ? {} : { signal: io.signal })
+              .then(finish)
+              .catch(finish)
+
+            // Register a one-shot SSE early-wake hook.
+            earlyWake = () => {
+              earlyWake = null
+              finish()
+            }
+
+            // If the signal fires cancel immediately.
+            io.signal?.addEventListener('abort', finish, { once: true })
+            void timer
+          })
         }
+
+        watcher?.stop()
       }
       await app.close()
       await write(io.stdout, 'Stopped.\n')
