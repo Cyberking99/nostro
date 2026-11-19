@@ -8,7 +8,7 @@ import { moveAccount } from '@nostro-labs/nostro'
 import { COMMON, UsageError, date, flag, positionals, string, tenant } from '../args.js'
 import type { Command } from '../command.js'
 import { COMMON_HELP, withStore } from '../command.js'
-import { json, write } from '../io.js'
+import { write } from '../io.js'
 
 export const chart: Command = {
   name: 'chart',

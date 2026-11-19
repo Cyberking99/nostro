@@ -273,7 +273,7 @@ export interface BalanceSheetOptions {
 
 export async function balanceSheet(options: BalanceSheetOptions): Promise<BalanceSheetReport> {
   const { store, tenantId, kindMap = {} } = options
-  const tb = await trialBalance({ store, tenantId, asOf: options.asOf })
+  const tb = await trialBalance({ store, tenantId, ...(options.asOf === undefined ? {} : { asOf: options.asOf }) })
 
   // Group by kind
   interface AccountAssetBalance { account: string; asset: string; balance: bigint; decimals: number }
@@ -295,15 +295,6 @@ export async function balanceSheet(options: BalanceSheetOptions): Promise<Balanc
       // income accounts normally have credit balances (netBalance < 0 in our
       // debit-positive scheme), so we negate them for the earnings line.
       const existing = incomeNet.get(line.asset)
-      // Income credit balance → positive earnings; expense debit balance → negative earnings
-      const contribution = kind === 'income' ? -line.netBalance : -line.netBalance
-      // For income: a credit balance means positive earnings → negate netBalance
-      // For expense: a debit balance means negative earnings → negate netBalance
-      // Both collapse to the same formula: contribution = -netBalance
-      // (income normal credit: netBalance < 0, so -netBalance > 0 → positive earnings)
-      // (expense normal debit: netBalance > 0, so -netBalance < 0 → negative earnings)
-      const _ = contribution
-      // Re-derive correctly:
       // income: credit normal → netBalance = debits - credits, normally negative → earnings += -netBalance
       // expense: debit normal → netBalance = debits - credits, normally positive → earnings += -netBalance
       const earningsContrib = -line.netBalance
@@ -398,7 +389,7 @@ export interface IncomeStatementOptions {
 
 export async function incomeStatement(options: IncomeStatementOptions): Promise<IncomeStatementReport> {
   const { store, tenantId, kindMap = {} } = options
-  const tb = await trialBalance({ store, tenantId, asOf: options.to })
+  const tb = await trialBalance({ store, tenantId, ...(options.to === undefined ? {} : { asOf: options.to }) })
 
   // For income accounts we also need to subtract anything before `from` to get
   // just the period. We do this by computing a "before" trial balance and diffing.

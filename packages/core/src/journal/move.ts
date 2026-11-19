@@ -39,6 +39,7 @@
  */
 import type { JournalEntry, NewJournalLine, Side } from '../model/index.js'
 import { Money } from '../money/index.js'
+import type { AssetId } from '../money/index.js'
 import type { Store } from '../store/index.js'
 
 export interface MoveAccountOptions {
@@ -70,7 +71,7 @@ export interface MoveAccountResult {
 /** Signed raw unit balance of `account` across all entries, keyed by `asset/decimals`. */
 interface AssetBalance {
   raw: bigint
-  asset: string
+  asset: AssetId
   decimals: number
 }
 

@@ -79,7 +79,6 @@ To add a strategy, see [CONTRIBUTING](../CONTRIBUTING.md#adding-a-matching-strat
 | Credit with no memo or muxed id, while something is owed | `exception` | `MEMO_MISSING` |
 | Credit with no memo or muxed id, nothing owed | `exception` | `UNEXPECTED_CREDIT` |
 | Credit whose memo or muxed id matches nothing | `exception` | `UNMATCHED_NO_CANDIDATE` |
-| Credit with a hash memo (opaque reference) | `exception` | `MEMO_MALFORMED` |
 | Credit with a return memo (refund signal) | `exception` | `MEMO_MALFORMED` |
 | Credit with a text memo that normalises to nothing (`INV`, `#`) | `exception` | `MEMO_MALFORMED` |
 | Credit whose source enrichment is missing | `exception` | `ENRICHMENT_MISSING` |

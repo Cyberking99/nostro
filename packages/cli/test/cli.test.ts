@@ -206,7 +206,7 @@ describe('opening a database', () => {
     try {
       const first = await nostro(cwd, ['migrate'], { env })
       expect(first.code).toBe(0)
-      expect(first.stdout).toContain(`(schema ${schema}) from schema version 0 to 6.`)
+      expect(first.stdout).toContain(`(schema ${schema}) from schema version 0 to 5.`)
       expect(first.stdout).not.toContain(':nostro@')
       const synced = await nostro(cwd, ['sync', '--account', A, '--json'], { env, fetch: paid().fetch })
       expect(synced.code).toBe(0)

@@ -366,7 +366,14 @@ export function createServer(options: ServerOptions): FastifyInstance {
         async ({ tenantId, query: q }) => {
           const from = q.from !== undefined ? new Date(q.from) : undefined
           const to = q.to !== undefined ? new Date(q.to) : undefined
-          const ledger = await accountLedger({ store, tenantId, account: q.account, asset: q.asset, from, to })
+          const ledger = await accountLedger({
+            store,
+            tenantId,
+            account: q.account,
+            asset: q.asset,
+            ...(from === undefined ? {} : { from }),
+            ...(to === undefined ? {} : { to }),
+          })
           return {
             account: ledger.account,
             asset: ledger.asset,
@@ -413,7 +420,12 @@ export function createServer(options: ServerOptions): FastifyInstance {
         async ({ tenantId, query: q }) => {
           const from = q.from !== undefined ? new Date(q.from) : undefined
           const to = q.to !== undefined ? new Date(q.to) : undefined
-          const stmt = await incomeStatement({ store, tenantId, from, to })
+          const stmt = await incomeStatement({
+            store,
+            tenantId,
+            ...(from === undefined ? {} : { from }),
+            ...(to === undefined ? {} : { to }),
+          })
           return {
             from: stmt.from?.toISOString() ?? null,
             to: stmt.to?.toISOString() ?? null,

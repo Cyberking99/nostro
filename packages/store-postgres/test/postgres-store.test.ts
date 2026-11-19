@@ -230,9 +230,11 @@ if (pool === undefined) {
       it('upgrades a version 1 database with data to the latest version', async () => {
         const { store, s, movement } = await withMovement()
         // Put the schema back to version 1, keeping its data.
-        await pool.query(`DROP TABLE ${s}.journal_lines, ${s}.journal_entries, ${s}.events`)
         await pool.query(
-          `DROP FUNCTION ${s}.journal_entry_balanced, ${s}.journal_line_balanced, ${s}.journal_check_entry, ${s}.journal_append_only, ${s}.events_append_only`,
+          `DROP TABLE ${s}.expectation_reference_index, ${s}.journal_period_actions, ${s}.journal_lines, ${s}.journal_entries, ${s}.events`,
+        )
+        await pool.query(
+          `DROP FUNCTION ${s}.journal_entry_balanced, ${s}.journal_line_balanced, ${s}.journal_check_entry, ${s}.journal_append_only, ${s}.events_append_only, ${s}.journal_period_actions_append_only`,
         )
         await pool.query(`DELETE FROM ${s}.migrations WHERE version > 1`)
         await store.migrate()

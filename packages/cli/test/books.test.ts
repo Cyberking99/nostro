@@ -199,3 +199,75 @@ describe('nostro export', () => {
     expect(run.stderr).toMatch(/ENOENT/)
   })
 })
+
+describe('nostro report', () => {
+  const CASH = `assets:stellar:testnet:${A}`
+
+  it('prints a balanced trial balance and balance sheet, as text and JSON', async () => {
+    const cwd = await books()
+    const tb = await nostro(cwd, ['report', 'trial-balance'])
+    expect(tb.code).toBe(0)
+    expect(tb.stdout).toMatch(new RegExp(`${CASH} +XLM +25\\.0000000 +5\\.0000100 +19\\.9999900\\n`))
+    expect(tb.stdout).toContain('\nBalanced: yes\n')
+    const tbJson = JSON.parse((await nostro(cwd, ['report', 'trial-balance', '--json'])).stdout)
+    expect(tbJson).toMatchObject({ balanced: true, assetTotals: [{ asset: 'native', net: '0' }] })
+    expect(JSON.parse((await nostro(cwd, ['report', 'trial-balance', '--as-of', '2026-01-01', '--json'])).stdout).lines).toEqual([])
+
+    const bs = await nostro(cwd, ['report', 'balance-sheet'])
+    expect(bs.stdout).toContain('=== ASSET ===\n')
+    expect(bs.stdout).toMatch(/=== CURRENT EARNINGS ===\n\(net income\) +XLM +-0\.0000100\n/)
+    expect(bs.stdout).toContain('\nBalanced: yes\n')
+    const bsJson = JSON.parse((await nostro(cwd, ['report', 'balance-sheet', '--json'])).stdout)
+    expect(bsJson).toMatchObject({ asOf: null, balanced: true, currentEarnings: [{ asset: 'native', amount: '-100' }] })
+  })
+
+  it('prints an account ledger with running balances, and an income statement', async () => {
+    const cwd = await books()
+    const ledger = await nostro(cwd, ['report', 'ledger', '--account', CASH, '--asset', 'native'])
+    expect(ledger.code).toBe(0)
+    expect(ledger.stdout).toContain('Opening balance: 0.0000000\n')
+    expect(ledger.stdout).toMatch(/Network fee 0\.0000100 XLM +0\.0000100 +19\.9999900\n/)
+    expect(ledger.stdout).toContain('Closing balance: 19.9999900\n')
+    const ledgerJson = JSON.parse((await nostro(cwd, ['report', 'ledger', '--account', CASH, '--asset', 'native', '--json'])).stdout)
+    expect(ledgerJson.lines.map((l: { runningBalance: string }) => l.runningBalance)).toEqual(['250000000', '200000000', '199999900'])
+    const later = JSON.parse(
+      (await nostro(cwd, ['report', 'ledger', '--account', CASH, '--asset', 'native', '--from', '2027-01-01', '--json'])).stdout,
+    )
+    expect(later).toMatchObject({ openingBalance: '199999900', lines: [] })
+
+    const income = await nostro(cwd, ['report', 'income'])
+    expect(income.stdout).toMatch(/=== EXPENSES ===\nexpenses:network-fees +XLM +0\.0000100\n/)
+    expect(income.stdout).toMatch(/=== NET RESULT ===\nXLM +-0\.0000100\n/)
+    const incomeJson = JSON.parse((await nostro(cwd, ['report', 'income', '--to', '2027-01-01', '--json'])).stdout)
+    expect(incomeJson.lines).toEqual([{ account: 'expenses:network-fees', kind: 'expense', asset: 'native', amount: '100' }])
+  })
+
+  it('exits 2 on an unknown report or a ledger without its account', async () => {
+    const cwd = await books()
+    expect(await nostro(cwd, ['report', 'nope'])).toMatchObject({ code: 2, stderr: expect.stringContaining('Unknown report type "nope"') })
+    expect(await nostro(cwd, ['report', 'ledger'])).toMatchObject({ code: 2, stderr: expect.stringContaining('--account') })
+  })
+})
+
+describe('nostro chart move', () => {
+  it('moves a balance once, then has nothing left to move', async () => {
+    const cwd = await books()
+    const argv = ['chart', 'move', '--from', 'expenses:network-fees', '--to', 'expenses:fees', '--note', 'rename']
+    expect((await nostro(cwd, argv)).stdout).toBe(
+      'Moved 1 balance(s) from "expenses:network-fees" to "expenses:fees" (assets: native).\n',
+    )
+    expect(JSON.parse((await nostro(cwd, [...argv, '--json'])).stdout)).toEqual({ moved: 0, assets: [] })
+    expect((await nostro(cwd, argv)).stdout).toBe('Nothing to move: expenses:network-fees has a zero balance in every asset.\n')
+    const income = JSON.parse((await nostro(cwd, ['report', 'income', '--json'])).stdout)
+    expect(income.lines.find((l: { account: string }) => l.account === 'expenses:fees')).toMatchObject({ amount: '100' })
+  })
+
+  it('refuses a cash account, an unknown subcommand and missing codes', async () => {
+    const cwd = await books()
+    const cash = await nostro(cwd, ['chart', 'move', '--from', `assets:stellar:testnet:${A}`, '--to', 'assets:x'])
+    expect(cash).toMatchObject({ code: 1, stderr: expect.stringContaining('is a cash account') })
+    expect(await nostro(cwd, ['chart', 'nope'])).toMatchObject({ code: 2, stderr: expect.stringContaining('Use "move"') })
+    expect(await nostro(cwd, ['chart', 'move', '--to', 'x'])).toMatchObject({ code: 2, stderr: expect.stringContaining('--from') })
+    expect(await nostro(cwd, ['chart', 'move', '--from', 'x'])).toMatchObject({ code: 2, stderr: expect.stringContaining('--to') })
+  })
+})

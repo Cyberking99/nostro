@@ -181,7 +181,7 @@ describe('normalizeEffects: accounts, balances and contracts', () => {
     expect(summary(credit!)).toEqual({
       direction: 'credit',
       kind: 'transfer',
-      amount: f.operation.starting_balance,
+      amount: '1.5000000',
       asset: NATIVE,
       counterparty: f.operation.funder,
     })

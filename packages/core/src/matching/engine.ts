@@ -95,11 +95,11 @@ function unmatchedCode(movement: Movement, candidates: readonly Candidate[]): Ex
     return candidates.length > 0 ? 'MEMO_MISSING' : 'UNEXPECTED_CREDIT'
   }
   // A memo is present but cannot be used for matching:
-  // - hash memos are opaque references (#2 in roadmap)
   // - return memos are for refunds (#15 in roadmap)
   // - a text memo that normalises to empty (e.g. just "#" or "INV") has no
   //   usable content; there is nothing to match against
-  if (movement.memo?.type === 'hash') return 'MEMO_MALFORMED'
+  // A hash memo is matched by `memo_hash`, so one that matches nothing is
+  // simply unmatched.
   if (movement.memo?.type === 'return') return 'MEMO_MALFORMED'
   if (movement.memo?.type === 'text' && normalizeReference(movement.memo.value) === '') return 'MEMO_MALFORMED'
   return 'UNMATCHED_NO_CANDIDATE'

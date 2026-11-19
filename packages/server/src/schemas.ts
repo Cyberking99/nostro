@@ -86,7 +86,7 @@ export const expectationBody = {
           type: 'object',
           additionalProperties: false,
           required: ['type', 'value'],
-          properties: { type: { const: 'id' }, value: { type: 'string', pattern: UINT64 } },
+          properties: { type: { const: 'id' }, value: { type: 'string', minLength: 1 } },
         },
         {
           type: 'object',

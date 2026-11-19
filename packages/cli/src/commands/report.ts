@@ -109,7 +109,7 @@ ${COMMON_HELP}`,
       const from = date(args, 'from')
       const to = date(args, 'to')
       return withStore(args, io, async (store) => {
-        const ledger = await accountLedger({ store, tenantId, account, asset: assetId, from, to })
+        const ledger = await accountLedger({ store, tenantId, account, asset: assetId, ...(from === undefined ? {} : { from }), ...(to === undefined ? {} : { to }) })
         if (isJson) {
           await write(io.stdout, json({
             account: ledger.account,
@@ -186,7 +186,7 @@ ${COMMON_HELP}`,
       const from = date(args, 'from')
       const to = date(args, 'to')
       return withStore(args, io, async (store) => {
-        const stmt = await incomeStatement({ store, tenantId, from, to })
+        const stmt = await incomeStatement({ store, tenantId, ...(from === undefined ? {} : { from }), ...(to === undefined ? {} : { to }) })
         if (isJson) {
           await write(io.stdout, json({
             from: stmt.from?.toISOString() ?? null,
