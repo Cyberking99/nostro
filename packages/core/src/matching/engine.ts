@@ -21,6 +21,7 @@
 import type { ExceptionCode, Json, Movement } from '../model/index.js'
 import type { Money } from '../money/index.js'
 import { isSameCodeDifferentIssuer } from '../money/index.js'
+import { normalizeReference } from './reference.js'
 import { DEFAULT_STRATEGIES } from './strategies/index.js'
 import type { Candidate, MatchStrategy, Signal, SignalFamily } from './types.js'
 
@@ -93,6 +94,14 @@ function unmatchedCode(movement: Movement, candidates: readonly Candidate[]): Ex
   if (movement.memo === null && movement.muxedId === null) {
     return candidates.length > 0 ? 'MEMO_MISSING' : 'UNEXPECTED_CREDIT'
   }
+  // A memo is present but cannot be used for matching:
+  // - hash memos are opaque references (#2 in roadmap)
+  // - return memos are for refunds (#15 in roadmap)
+  // - a text memo that normalises to empty (e.g. just "#" or "INV") has no
+  //   usable content; there is nothing to match against
+  if (movement.memo?.type === 'hash') return 'MEMO_MALFORMED'
+  if (movement.memo?.type === 'return') return 'MEMO_MALFORMED'
+  if (movement.memo?.type === 'text' && normalizeReference(movement.memo.value) === '') return 'MEMO_MALFORMED'
   return 'UNMATCHED_NO_CANDIDATE'
 }
 

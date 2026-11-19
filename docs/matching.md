@@ -25,11 +25,27 @@ randomness, and every decision records its reasons as evidence.
 | `muxed_id` | identifier | 1.00 | paid to the `M…` address issued for the expectation | none if ids are issued uniquely |
 | `memo_id` | identifier | 0.95 | `MEMO_ID` equals the memo id asked for, or the expectation's muxed id | payer typo or a reused old invoice id |
 | `memo_text` | identifier | 0.85 | normalised text memo equals the normalised reference or requested memo | normalisation is deliberately loose |
+| `memo_cross_type` | identifier | 0.75 | id memo sent for a text reference, or text memo sent for an id; see below | any integer reference that happens to equal a pending memo id |
 | `exact_amount` | amount | 0.60 unique / 0.20 shared | exactly the amount still owed, same asset, inside the window | any two invoices for the same amount |
 
 **An amount alone never settles anything:** 0.60 is below the 0.70 threshold, so a unique-amount match
 without a memo becomes a suggestion in the exceptions queue. Lowering `threshold` changes that, and
 should be a deliberate decision.
+
+### Cross-type memo matching (`memo_cross_type`)
+
+Payers often send the right reference in the wrong kind of memo field. This strategy covers two cases:
+
+- **Id memo for a text reference.** The payer sends `MEMO_ID 1042` for `INV-1042`. The id is
+  converted to its decimal string (`"1042"`) and compared against the expectation's normalised
+  reference and any normalised text memo it asked for.
+- **Text memo for an id expectation.** The expectation asked for `MEMO_ID 9001`, or the account
+  carries `muxedId 9001`, and the payer typed `"9001"` as a text memo. The normalised text is
+  compared against the decimal string of the requested id and of the muxed id.
+
+Leading zeros keep their meaning: `MEMO_ID 123` never matches reference `00123`, because the payer
+who meant that would have sent the text `"00123"`. Hash and return memos are not candidates for
+cross-type matching.
 
 Text memos are normalised before comparison (NFKC, zero-width and control characters removed,
 upper-cased, `INVOICE` / `INV` / `REF` / `NO` / `#` prefixes dropped at a word boundary, separators
@@ -51,6 +67,9 @@ To add a strategy, see [CONTRIBUTING](../CONTRIBUTING.md#adding-a-matching-strat
 | Credit with no memo or muxed id, while something is owed | `exception` | `MEMO_MISSING` |
 | Credit with no memo or muxed id, nothing owed | `exception` | `UNEXPECTED_CREDIT` |
 | Credit whose memo or muxed id matches nothing | `exception` | `UNMATCHED_NO_CANDIDATE` |
+| Credit with a hash memo (opaque reference) | `exception` | `MEMO_MALFORMED` |
+| Credit with a return memo (refund signal) | `exception` | `MEMO_MALFORMED` |
+| Credit with a text memo that normalises to nothing (`INV`, `#`) | `exception` | `MEMO_MALFORMED` |
 | Credit whose source enrichment is missing | `exception` | `ENRICHMENT_MISSING` |
 | Debit that matches no payout | `exception` | `UNEXPECTED_DEBIT` |
 | Network fee | `ignored` | none |
@@ -111,3 +130,5 @@ These are known gaps, each planned as its own self-contained piece of work:
 - **A second payment quoting a settled invoice's text reference** is raised as
   `UNMATCHED_NO_CANDIDATE` rather than `DUPLICATE_PAYMENT`: settled expectations are only found again
   through a muxed id.
+- **Return memos on credits.** A `MEMO_RETURN` currently raises `MEMO_MALFORMED`. Pairing it with
+  the original payment is left for the refunds work (#15).
