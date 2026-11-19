@@ -27,6 +27,7 @@ randomness, and every decision records its reasons as evidence.
 | `memo_hash` | identifier | 0.95 | `MEMO_HASH` equals the 64-hex hash asked for, compared exactly | payer typo or a reused old hash |
 | `memo_text` | identifier | 0.85 | normalised text memo equals the normalised reference or requested memo | normalisation is deliberately loose |
 | `memo_cross_type` | identifier | 0.75 | id memo sent for a text reference, or text memo sent for an id; see below | any integer reference that happens to equal a pending memo id |
+| `memo_truncated` | identifier | 0.60 | a 28-byte text memo is a proper prefix of the normalised reference | long references often share a prefix; corroboration only |
 | `exact_amount` | amount | 0.60 unique / 0.20 shared | exactly the amount still owed, same asset, inside the window | any two invoices for the same amount |
 | `known_payer` | payer | 0.40 | `counterparty` is an account listed in `payers` | accounts are shared and reused; corroboration only, never an identifier |
 
@@ -54,6 +55,12 @@ upper-cased, `INVOICE` / `INV` / `REF` / `NO` / `#` prefixes dropped at a word b
 dropped). `INV-00123`, `inv #00123`, `Invoice 00123` and `ＩＮＶ００１２３` are the same reference;
 `INVENTORY-5` keeps its word, and `00123` is not `123`.
 
+A wallet cuts a text memo at 28 **bytes**, so a long reference can arrive as a prefix. A cut inside
+a multi-byte character may decode as U+FFFD and appear longer than 28 bytes; that is treated as the
+same signal. It is scored 0.60: alone it raises `MEMO_TRUNCATED` naming the likely expectation, two
+candidates sharing the prefix stay `AMBIGUOUS_MATCH`, and a unique exact amount takes it to 0.84 so
+the payment settles.
+
 To add a strategy, see [CONTRIBUTING](../CONTRIBUTING.md#adding-a-matching-strategy).
 
 ## Outcomes
@@ -66,6 +73,7 @@ To add a strategy, see [CONTRIBUTING](../CONTRIBUTING.md#adding-a-matching-strat
 | Matched, but in another asset (incl. same code, other issuer) | `exception` | `WRONG_ASSET` |
 | Matched, but paid after the expectation expired | `exception` | `LATE_BEYOND_WINDOW` |
 | Best candidate below 0.70, or two within 0.15 | `exception` | `AMBIGUOUS_MATCH` |
+| Best evidence is a 28-byte prefix of one reference | `exception` | `MEMO_TRUNCATED` |
 | Credit with no memo or muxed id, while something is owed | `exception` | `MEMO_MISSING` |
 | Credit with no memo or muxed id, nothing owed | `exception` | `UNEXPECTED_CREDIT` |
 | Credit whose memo or muxed id matches nothing | `exception` | `UNMATCHED_NO_CANDIDATE` |
@@ -119,8 +127,6 @@ movement's disposition with nothing to support it (I1). Apply or ignore the move
 
 These are known gaps, each planned as its own self-contained piece of work:
 
-- **Truncated text memos.** A reference longer than 28 bytes of UTF-8 is cut by the wallet; nostro does
-  not yet detect truncation or prefix-match it.
 - **Amount fingerprints**, a unique sub-unit suffix per invoice for payers who cannot send memos.
 - **Claimable balances** as a two-step create-then-claim lifecycle.
 - **Several payments in one transaction** sharing a memo.

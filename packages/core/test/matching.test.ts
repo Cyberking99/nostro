@@ -170,6 +170,45 @@ describe('decide: identifying the expectation', () => {
   })
 })
 
+describe('decide: truncated memos', () => {
+  const reference = 'INVOICE-2026-ACME-CORPORATION-000123'
+  const cut = 'INVOICE-2026-ACME-CORPORATIO'
+
+  it('raises MEMO_TRUNCATED when a 28-byte prefix is the best evidence', () => {
+    const e = expectation({ reference, amount: usdc('99') })
+    const d = exception(decide(movement({ memo: { type: 'text', value: cut } }), [candidate(e)]))
+    expect(d).toMatchObject({ code: 'MEMO_TRUNCATED', expectationId: e.id })
+    expect(d.detail).toContain(reference)
+  })
+
+  it('treats a U+FFFD from a character cut in half as truncated', () => {
+    const multi = 'INVOICE-2026-ACME-CORPORATSÁCTION-000123'
+    const memo = 'INVOICE-2026-ACME-CORPORATS\uFFFD'
+    const e = expectation({ reference: multi, amount: usdc('99') })
+    const d = exception(decide(movement({ memo: { type: 'text', value: memo } }), [candidate(e)]))
+    expect(d).toMatchObject({ code: 'MEMO_TRUNCATED', expectationId: e.id })
+  })
+
+  it('does not fire for a prefix shorter than 28 bytes', () => {
+    const e = expectation({ reference, amount: usdc('99') })
+    const d = exception(decide(movement({ memo: { type: 'text', value: cut.slice(0, 27) } }), [candidate(e)]))
+    expect(d.code).toBe('UNMATCHED_NO_CANDIDATE')
+  })
+
+  it('leaves two references sharing the prefix ambiguous', () => {
+    const a = expectation({ reference, amount: usdc('99') })
+    const b = expectation({ reference: 'INVOICE-2026-ACME-CORPORATION-000124', amount: usdc('99') })
+    const d = exception(decide(movement({ memo: { type: 'text', value: cut } }), [candidate(a), candidate(b)]))
+    expect(d.code).toBe('AMBIGUOUS_MATCH')
+  })
+
+  it('settles when a unique exact amount corroborates the truncated memo', () => {
+    const e = expectation({ reference })
+    const d = allocation(decide(movement({ memo: { type: 'text', value: cut } }), [candidate(e)]))
+    expect(d).toMatchObject({ expectationId: e.id, strategy: 'memo_truncated', score: 0.84 })
+  })
+})
+
 describe('decide: amounts', () => {
   it('allocates a partial payment in full, leaving the rest owed', () => {
     const e = expectation({ reference: 'INV-1' })

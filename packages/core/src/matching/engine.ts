@@ -141,6 +141,21 @@ export function decide(
   }
 
   const lead = second === undefined ? top.score : top.score - second.score
+  const strongest = [...top.signals].sort((a, b) => b.score - a.score)[0]
+  if (top.score < threshold) {
+    // A truncated memo is a strong hint, not an identifier. Name the likely
+    // expectation when it stands alone, but leave a genuine tie ambiguous.
+    if (strongest?.strategy === 'memo_truncated' && lead >= margin) {
+      return {
+        outcome: 'exception',
+        code: 'MEMO_TRUNCATED',
+        expectationId: top.candidate.expectation.id,
+        amount: movement.amount,
+        detail: `Memo looks cut at 28 bytes; it prefixes reference ${top.candidate.expectation.reference}.`,
+        evidence,
+      }
+    }
+  }
   if (top.score < threshold || lead < margin) {
     const why =
       top.score < threshold
@@ -188,13 +203,12 @@ export function decide(
 
   const amount = movement.amount.compare(remaining) > 0 ? remaining : movement.amount
   const residual = movement.amount.subtract(amount)
-  const strongest = [...top.signals].sort((a, b) => b.score - a.score)[0]!
   return {
     outcome: 'allocate',
     expectationId: expectation.id,
     amount,
     residual: residual.isZero() ? null : residual,
-    strategy: strongest.strategy,
+    strategy: strongest!.strategy,
     score: round(top.score),
     evidence,
   }
