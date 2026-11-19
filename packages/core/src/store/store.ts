@@ -192,6 +192,8 @@ export interface StoreTx extends StoreReader, JournalTx {
 export interface JournalQuery {
   readonly tenantId: string
   readonly movementId?: string
+  /** Filter lines to this account code (matches any entry that has at least one line on this account). */
+  readonly account?: string
   /** Entries with `seq` greater than this, for paging in posting order. */
   readonly afterSeq?: number
   /** Effective on or after this instant. */

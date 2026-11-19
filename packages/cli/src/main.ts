@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs'
 import { CliError, UsageError, parse } from './args.js'
 import type { Command } from './command.js'
+import { chart } from './commands/chart.js'
 import { doctor } from './commands/doctor.js'
 import { exceptions } from './commands/exceptions.js'
 import { expect } from './commands/expect.js'
@@ -15,6 +16,7 @@ import { migrate } from './commands/migrate.js'
 import { post } from './commands/post.js'
 import { period } from './commands/period.js'
 import { reconcile } from './commands/reconcile.js'
+import { report } from './commands/report.js'
 import { resolve } from './commands/resolve.js'
 import { serve } from './commands/serve.js'
 import { sync } from './commands/sync.js'
@@ -31,6 +33,8 @@ export const COMMANDS: readonly Command[] = [
   resolve,
   post,
   period,
+  chart,
+  report,
   doctor,
   exportJournal,
   serve,
