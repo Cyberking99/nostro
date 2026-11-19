@@ -13,6 +13,7 @@ import { expectations } from './commands/expectations.js'
 import { exportJournal } from './commands/export.js'
 import { migrate } from './commands/migrate.js'
 import { post } from './commands/post.js'
+import { period } from './commands/period.js'
 import { reconcile } from './commands/reconcile.js'
 import { resolve } from './commands/resolve.js'
 import { serve } from './commands/serve.js'
@@ -29,6 +30,7 @@ export const COMMANDS: readonly Command[] = [
   exceptions,
   resolve,
   post,
+  period,
   doctor,
   exportJournal,
   serve,

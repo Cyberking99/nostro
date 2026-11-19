@@ -274,4 +274,27 @@ export const MIGRATIONS: readonly ((s: string) => string)[] = [
     CREATE TRIGGER events_no_truncate BEFORE TRUNCATE ON ${s}.events
       FOR EACH STATEMENT EXECUTE FUNCTION ${s}.events_append_only();
   `,
+  // 4: append-only audit of period closes and reopens.
+  (s) => `
+    CREATE TABLE ${s}.journal_period_actions (
+      seq        bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      tenant_id  text NOT NULL,
+      action     text NOT NULL CHECK (action IN ('close', 'reopen')),
+      closed_through timestamptz,
+      note       text,
+      reason     text,
+      created_at timestamptz NOT NULL,
+      CHECK (
+        (action = 'close' AND closed_through IS NOT NULL AND reason IS NULL) OR
+        (action = 'reopen' AND closed_through IS NULL AND note IS NULL AND reason IS NOT NULL)
+      )
+    );
+    CREATE INDEX journal_period_actions_tenant ON ${s}.journal_period_actions (tenant_id, seq);
+    CREATE FUNCTION ${s}.journal_period_actions_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN RAISE EXCEPTION 'journal period actions are append-only' USING ERRCODE = 'check_violation'; END $$;
+    CREATE TRIGGER journal_period_actions_append_only BEFORE UPDATE OR DELETE ON ${s}.journal_period_actions
+      FOR EACH ROW EXECUTE FUNCTION ${s}.journal_period_actions_append_only();
+    CREATE TRIGGER journal_period_actions_no_truncate BEFORE TRUNCATE ON ${s}.journal_period_actions
+      FOR EACH STATEMENT EXECUTE FUNCTION ${s}.journal_period_actions_append_only();
+  `,
 ]

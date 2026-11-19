@@ -49,6 +49,12 @@ movement should now be accounted for and how it already is ([ADR 0007](./adr/000
 - **reclass** — cash untouched; dated when posted, because applying cash happens when it is applied;
 - **correction** — changes the cash leg (a source correction); dated like the original.
 
+An accounting-period close is a per-tenant inclusive effective-date cutoff. Explicit entries into a
+closed period are refused. If an automatic initial entry or correction would be backdated into a
+closed period, nostro posts it at the first open millisecond and records the original effective date
+in the entry description; the linked movement/original entry retains the source context. Reopening
+requires a reason.
+
 ## Guarantees, and who enforces them
 
 | Guarantee | Every store (shared rule, before writing) | PostgreSQL itself | SQLite itself |
@@ -61,10 +67,11 @@ movement should now be accounted for and how it already is ([ADR 0007](./adr/000
 ## Export
 
 ```ts
-import { journalCsv, journalCsvRows } from '@nostro-labs/nostro'
+import { journalCsv, journalCsvRows, journalBeancountRows } from '@nostro-labs/nostro'
 
 const october = await journalCsv({ store, tenantId: 'acme', from: new Date('2026-10-01'), to: new Date('2026-11-01') })
 for await (const row of journalCsvRows({ store, tenantId: 'acme' })) process.stdout.write(row) // streams
+for await (const line of journalBeancountRows({ store, tenantId: 'acme', commodityMap })) process.stdout.write(line)
 ```
 
 One row per journal line, RFC 4180 with CRLF line endings. Columns: `entry_id`, `seq`, `kind`,
@@ -77,6 +84,51 @@ One row per journal line, RFC 4180 with CRLF line endings. Columns: `entry_id`, 
   prefixed with `'`. References and account codes come from users, and these files get opened in
   spreadsheets. Payment memo text, which the payer controls, is never written.
 
+`nostro export --format quickbooks --account-map accounts.json` writes the QuickBooks Online
+journal-entry columns `Journal No.`, `Journal Date`, `Account Name`, `Debits`, `Credits` and
+`Description`. Each entry has one journal number, and every account code must be mapped to an
+existing QuickBooks account name. Since nostro has no price feed, the export refuses more than one
+asset; use an organisation whose home currency treats the exported asset 1:1.
+
+`nostro export --format xero --account-map accounts.json` writes manual-journal rows grouped by a
+unique `Narration` and `Date`, with `AccountCode`, `Description`, `TaxRate`, `Debit` and `Credit`.
+It refuses unmapped accounts, mixed assets and files over 300 lines. The account map targets
+existing Xero account codes. `--tax-rate` selects a tax-rate name already configured in Xero
+(default `No Tax`); nostro does not infer tax treatment. Export one asset at a time to an
+organisation whose base currency treats it 1:1.
+
+`nostro export --format beancount --commodity-map assets.json` writes Beancount ledger text.
+Account codes are converted to Beancount capitalization only when every component is valid;
+unconvertible custom codes are errors. The commodity map must use each full asset id, including
+issuer, as its key, and must map distinct assets to distinct uppercase commodity names. The output
+includes one `open` directive per used account and keeps exact amounts and movement, transaction
+hash and expectation references as metadata.
+
+For QuickBooks and Xero, `--account-map` names a JSON object mapping nostro account codes to the
+external account names or codes. For example:
+
+```json
+{
+  "assets:stellar:testnet:G...": "Checking",
+  "liabilities:unapplied-receipts": "Unapplied Receipts"
+}
+```
+
+For Beancount, `--commodity-map` is a JSON object keyed by the exact asset id (for example
+`USDC:GA5Z...`) and valued by a unique uppercase commodity such as `USDCISSUERA`.
+
+## Accounting periods
+
+```sh
+nostro period close --through 2026-10-31 --note "October reported"
+nostro period reopen --reason "Correcting a source statement"
+```
+
+A date-only close cutoff covers that entire UTC day; an instant cutoff is inclusive. Closes and
+reopens are tenant-scoped and recorded in an append-only audit table. Stores reject entries with an
+effective date on or before the active cutoff using `journal_period_closed`. A later close or reopen
+is serialized with posting, so a concurrent entry cannot slip into the closed range.
+
 ## Checked against the network
 
 `node scripts/check-balances.mjs --journal <G…>` ingests an account's whole history, reconciles it
@@ -86,5 +138,3 @@ Horizon balance, that debits equal credits, and that running everything again po
 ## Not handled yet
 
 - Rules that pick accounts per counterparty, asset or expectation (the chart maps roles only).
-- Accounting periods and soft close. Entries are dated so they can be added without schema changes.
-- Exporters for QuickBooks, Xero and Beancount. Today there is the generic CSV above.

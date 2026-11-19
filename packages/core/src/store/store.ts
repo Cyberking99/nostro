@@ -94,6 +94,15 @@ export interface Resolution {
   readonly note: string
 }
 
+/** The current accounting-period close for one tenant, or no close. */
+export interface JournalPeriod {
+  readonly tenantId: string
+  /** Inclusive upper bound for effective dates. */
+  readonly through: Date
+  readonly note: string | null
+  readonly closedAt: Date
+}
+
 /** Read access. Every lookup is scoped by tenant; ids from another tenant read as absent. */
 export interface StoreReader extends JournalReader {
   getMovement(tenantId: string, id: string): Promise<Movement | null>
@@ -104,6 +113,7 @@ export interface StoreReader extends JournalReader {
   listAllocations(query: AllocationQuery): Promise<Allocation[]>
   getException(tenantId: string, id: string): Promise<ExceptionRecord | null>
   listExceptions(query: ExceptionQuery): Promise<ExceptionRecord[]>
+  getJournalPeriod(tenantId: string): Promise<JournalPeriod | null>
   getCursor(key: CursorKey): Promise<string | null>
   /** The event log, in `seq` order. Events are written by the store itself; see `events.ts`. */
   listEvents(query: EventQuery): Promise<OutboxEvent[]>
@@ -121,6 +131,13 @@ export interface StoreReader extends JournalReader {
  * default isolation level.
  */
 export interface StoreTx extends StoreReader, JournalTx {
+  /** Lock the tenant's close state until this transaction ends, then return it. */
+  lockJournalPeriod(tenantId: string): Promise<JournalPeriod | null>
+  /** Append a close action. The implementation acquires the tenant period lock. */
+  closeJournalPeriod(tenantId: string, through: Date, note: string | null): Promise<void>
+  /** Append a reopen action. The implementation acquires the tenant period lock. */
+  reopenJournalPeriod(tenantId: string, reason: string): Promise<void>
+
   /**
    * Record movements, deduplicated on `(tenantId, network, source, externalId)`.
    * Never overwrites: a re-delivery is reported as a duplicate or a conflict.
@@ -248,6 +265,8 @@ export type ConstraintName =
   | 'journal_posting_conflict'
   | 'journal_cash_mismatch'
   | 'journal_asset'
+  | 'journal_period_closed'
+  | 'journal_period_not_closed'
 
 export class StoreError extends Error {
   constructor(

@@ -237,4 +237,25 @@ export const MIGRATIONS: readonly string[] = [
     CREATE TRIGGER events_no_delete BEFORE DELETE ON events
       BEGIN SELECT RAISE(ABORT, 'the event log is append-only'); END;
   `,
+  // 5: append-only audit of period closes and reopens.
+  `
+    CREATE TABLE journal_period_actions (
+      seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id  TEXT NOT NULL,
+      action     TEXT NOT NULL CHECK (action IN ('close', 'reopen')),
+      closed_through INTEGER,
+      note       TEXT,
+      reason     TEXT,
+      created_at INTEGER NOT NULL,
+      CHECK (
+        (action = 'close' AND closed_through IS NOT NULL AND reason IS NULL) OR
+        (action = 'reopen' AND closed_through IS NULL AND note IS NULL AND reason IS NOT NULL)
+      )
+    );
+    CREATE INDEX journal_period_actions_tenant ON journal_period_actions (tenant_id, seq);
+    CREATE TRIGGER journal_period_actions_no_update BEFORE UPDATE ON journal_period_actions
+      BEGIN SELECT RAISE(ABORT, 'journal period actions are append-only'); END;
+    CREATE TRIGGER journal_period_actions_no_delete BEFORE DELETE ON journal_period_actions
+      BEGIN SELECT RAISE(ABORT, 'journal period actions are append-only'); END;
+  `,
 ]

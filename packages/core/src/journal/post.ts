@@ -25,6 +25,7 @@ export async function postMovement(
   movementId: string,
   options: PostOptions = {},
 ): Promise<JournalEntry | null> {
+  const period = await tx.lockJournalPeriod(tenantId)
   const movement = await tx.getMovement(tenantId, movementId)
   if (movement === null) throw new NotFoundError('movement', movementId)
   const plan = planPosting(
@@ -34,7 +35,21 @@ export async function postMovement(
     await tx.listJournalEntries({ tenantId, movementId }),
     options,
   )
-  return plan === null ? null : tx.postJournalEntry(plan)
+  if (plan === null) return null
+  if (
+    period !== null &&
+    plan.effectiveAt !== undefined &&
+    plan.effectiveAt.getTime() <= period.through.getTime()
+  ) {
+    const effectiveAt = new Date(period.through.getTime() + 1)
+    if (Number.isNaN(effectiveAt.getTime())) throw new RangeError('No representable instant exists after the period close.')
+    return tx.postJournalEntry({
+      ...plan,
+      effectiveAt,
+      description: `${plan.description} (original effective date: ${plan.effectiveAt.toISOString()})`,
+    })
+  }
+  return tx.postJournalEntry(plan)
 }
 
 export interface PostJournalOptions extends PostOptions {

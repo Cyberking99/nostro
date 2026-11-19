@@ -27,6 +27,7 @@ import type {
   ExpectationQuery,
   InsertMovementsResult,
   JournalEntry,
+  JournalPeriod,
   JournalQuery,
   MigratableStore,
   Movement,
@@ -58,6 +59,8 @@ import {
   checkCursorValue,
   checkDisposition,
   checkJournalEntry,
+  checkJournalPeriodClose,
+  checkJournalPeriodReopen,
   checkResolution,
   exceptionChanged,
   expectationChanged,
@@ -231,6 +234,26 @@ class PgReader implements StoreReader {
     )
     return row?.value ?? null
   }
+
+  async getJournalPeriod(tenantId: string): Promise<JournalPeriod | null> {
+    const [row] = await this.run<{
+      action: string
+      closed_through: Date | null
+      note: string | null
+      created_at: Date
+    }>(
+      `SELECT action, closed_through, note, created_at FROM ${this.s}.journal_period_actions
+       WHERE tenant_id = $1 ORDER BY seq DESC LIMIT 1`,
+      [tenantId],
+    )
+    if (row === undefined || row.action !== 'close' || row.closed_through === null) return null
+    return Object.freeze({
+      tenantId,
+      through: row.closed_through,
+      note: row.note,
+      closedAt: row.created_at,
+    })
+  }
 }
 
 const isUniqueViolation = (err: unknown, constraint: string): boolean =>
@@ -241,6 +264,7 @@ const isUniqueViolation = (err: unknown, constraint: string): boolean =>
 class PgTx extends PgReader implements StoreTx {
   private open = true
   private savepoints = 0
+  private readonly periodLocks = new Set<string>()
 
   constructor(
     s: string,
@@ -256,6 +280,34 @@ class PgTx extends PgReader implements StoreTx {
 
   close(): void {
     this.open = false
+  }
+
+  async lockJournalPeriod(tenantId: string): Promise<JournalPeriod | null> {
+    if (!this.periodLocks.has(tenantId)) {
+      await this.run('SELECT pg_advisory_xact_lock(hashtext($1))', [`nostro:journal-period:${this.s}:${tenantId}`])
+      this.periodLocks.add(tenantId)
+    }
+    return this.getJournalPeriod(tenantId)
+  }
+
+  async closeJournalPeriod(tenantId: string, through: Date, note: string | null): Promise<void> {
+    checkJournalPeriodClose(tenantId, through, note)
+    await this.lockJournalPeriod(tenantId)
+    await this.run(
+      `INSERT INTO ${this.s}.journal_period_actions (tenant_id, action, closed_through, note, reason, created_at)
+       VALUES ($1, 'close', $2, $3, NULL, $4)`,
+      [tenantId, through, note, this.now()],
+    )
+  }
+
+  async reopenJournalPeriod(tenantId: string, reason: string): Promise<void> {
+    const period = await this.lockJournalPeriod(tenantId)
+    checkJournalPeriodReopen(tenantId, reason, period !== null)
+    await this.run(
+      `INSERT INTO ${this.s}.journal_period_actions (tenant_id, action, closed_through, note, reason, created_at)
+       VALUES ($1, 'reopen', NULL, NULL, $2, $3)`,
+      [tenantId, reason, this.now()],
+    )
   }
 
   /**
@@ -288,6 +340,7 @@ class PgTx extends PgReader implements StoreTx {
 
   /** A locking read: the movement is held until the transaction ends. */
   override async getMovement(tenantId: string, id: string): Promise<Movement | null> {
+    await this.lockJournalPeriod(tenantId)
     const [row] = await this.run<MovementRow>(
       `SELECT * FROM ${this.s}.movements WHERE tenant_id = $1 AND id = $2 FOR UPDATE`,
       [tenantId, id],
@@ -504,11 +557,14 @@ class PgTx extends PgReader implements StoreTx {
 
   async postJournalEntry(n: NewJournalEntry): Promise<JournalEntry> {
     assertValidNewJournalEntry(n)
+    const period = await this.lockJournalPeriod(n.tenantId)
     // Locking the movement serialises posters, so the posting-number check
     // below sees every entry committed before it.
     const movement = n.movementId == null ? null : await this.lockMovement(n.tenantId, n.movementId)
     const existing = movement === null ? [] : await this.listJournalEntries({ tenantId: n.tenantId, movementId: movement.id })
-    checkJournalEntry(n, movement, existing)
+    const now = this.now()
+    const entryToPost = { ...n, effectiveAt: n.effectiveAt ?? now }
+    checkJournalEntry(entryToPost, movement, existing, period?.through ?? null)
     for (const line of n.lines) {
       if (line.expectationId != null && (await this.getExpectation(n.tenantId, line.expectationId)) === null) {
         throw new NotFoundError('expectation', line.expectationId)
@@ -517,12 +573,11 @@ class PgTx extends PgReader implements StoreTx {
         throw new NotFoundError('exception', line.exceptionId)
       }
     }
-    const now = this.now()
     const [entry] = await this.run<JournalEntryRow>(
       `INSERT INTO ${this.s}.journal_entries (
          id, tenant_id, movement_id, posting_no, kind, effective_at, posted_at, description
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [this.ids(), n.tenantId, movement?.id ?? null, n.postingNo ?? null, n.kind, n.effectiveAt ?? now, now, n.description],
+      [this.ids(), n.tenantId, movement?.id ?? null, n.postingNo ?? null, n.kind, entryToPost.effectiveAt, now, n.description],
     )
     const lines: JournalLineRow[] = []
     for (const [i, l] of n.lines.entries()) {
