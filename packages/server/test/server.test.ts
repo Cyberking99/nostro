@@ -159,6 +159,24 @@ describe('expectations', () => {
     expect((await app.inject({ url: '/v1/expectations/nope', headers: auth() })).statusCode).toBe(404)
   })
 
+  it('accepts a hash memo, and refuses one that is not 64 lowercase hex', async () => {
+    const app = server(new MemoryStore())
+    const hash = 'a'.repeat(64)
+    const created = await post(app, { reference: 'HASH-1', account: A, amount: '1', memo: { type: 'hash', value: hash } })
+    expect(created.statusCode).toBe(201)
+    expect(created.json().memo).toEqual({ type: 'hash', value: hash })
+    for (const [i, value] of ['aa', hash.toUpperCase(), 'g'.repeat(64)].entries()) {
+      const bad = await post(app, {
+        reference: `BAD-${i}`,
+        account: A,
+        amount: '1',
+        memo: { type: 'hash', value },
+      })
+      expect(bad.statusCode, value).toBe(400)
+      expect(bad.json()).toMatchObject({ code: 'invalid_request' })
+    }
+  })
+
   it('lists them with what has been paid, by status and account, a page at a time', async () => {
     const app = server(await seeded())
     await post(app, { reference: 'INV-1043', account: A, amount: '10' })

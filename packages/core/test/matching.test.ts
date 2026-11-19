@@ -144,6 +144,18 @@ describe('decide: identifying the expectation', () => {
     },
   )
 
+  it('settles on an exact hash memo, and ignores a different hash', () => {
+    const hash = 'a'.repeat(64)
+    const e = expectation({ memo: { type: 'hash', value: hash }, amount: usdc('99') })
+    expect(allocation(decide(movement({ memo: { type: 'hash', value: hash } }), [candidate(e)]))).toMatchObject({
+      expectationId: e.id,
+      strategy: 'memo_hash',
+      score: 0.95,
+    })
+    const other = exception(decide(movement({ memo: { type: 'hash', value: 'b'.repeat(64) } }), [candidate(e)]))
+    expect(other.code).toBe('UNMATCHED_NO_CANDIDATE')
+  })
+
   it('matches a text memo against the memo the expectation asked for', () => {
     const e = expectation({ reference: 'internal-7781', memo: { type: 'text', value: 'ACME-42' } })
     expect(allocation(decide(movement({ memo: { type: 'text', value: 'acme 42' } }), [candidate(e)])).expectationId).toBe(e.id)
