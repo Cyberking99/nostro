@@ -161,12 +161,222 @@ export function buildOpenApi() {
           responses: { '200': { description: 'CSV', content: { 'text/csv': { schema: { type: 'string' } } } }, ...errors },
         },
       },
+      '/v1/reports/trial-balance': {
+        get: {
+          operationId: 'trialBalance',
+          summary: 'Trial balance: per-account, per-asset totals and net balances',
+          description:
+            'Totals debits, credits and the net balance per account and asset as of an instant. ' +
+            'The `balanced` flag is `true` when every asset balances across all accounts.',
+          parameters: [
+            { name: 'asOf', in: 'query', required: false, schema: { type: 'string', format: 'date-time' }, description: 'Balance as of this instant; omit for all-time.' },
+          ],
+          responses: { '200': ok('TrialBalanceReport'), ...errors },
+        },
+      },
+      '/v1/reports/ledger': {
+        get: {
+          operationId: 'accountLedger',
+          summary: 'Account ledger with opening balance and running total',
+          description: 'Lists every line posted to an account for a given asset, with a running balance after each line.',
+          parameters: [
+            { name: 'account', in: 'query', required: true, schema: { type: 'string' }, description: 'Account code.' },
+            { name: 'asset', in: 'query', required: true, schema: { type: 'string' }, description: 'Asset id, e.g. "native" or "USDC:GA5Z...".' },
+            { name: 'from', in: 'query', required: false, schema: { type: 'string', format: 'date-time' }, description: 'Range start (inclusive).' },
+            { name: 'to', in: 'query', required: false, schema: { type: 'string', format: 'date-time' }, description: 'Range end (exclusive).' },
+          ],
+          responses: { '200': ok('AccountLedgerReport'), ...errors },
+        },
+      },
+      '/v1/reports/balance-sheet': {
+        get: {
+          operationId: 'balanceSheet',
+          summary: 'Balance sheet: assets, liabilities, equity and current earnings',
+          description:
+            'Groups accounts by kind and adds a computed current-earnings line. ' +
+            'One column per asset — no cross-asset arithmetic. ' +
+            '`receivable` and `payable` normally run credit balances inside nostro; see docs/journal.md.',
+          parameters: [
+            { name: 'asOf', in: 'query', required: false, schema: { type: 'string', format: 'date-time' }, description: 'Balance as of this instant; omit for all-time.' },
+          ],
+          responses: { '200': ok('BalanceSheetReport'), ...errors },
+        },
+      },
+      '/v1/reports/income': {
+        get: {
+          operationId: 'incomeStatement',
+          summary: 'Income statement for a period',
+          description: 'Lists income and expense accounts and computes a net result per asset.',
+          parameters: [
+            { name: 'from', in: 'query', required: false, schema: { type: 'string', format: 'date-time' }, description: 'Period start (inclusive).' },
+            { name: 'to', in: 'query', required: false, schema: { type: 'string', format: 'date-time' }, description: 'Period end (exclusive).' },
+          ],
+          responses: { '200': ok('IncomeStatementReport'), ...errors },
+        },
+      },
+      '/v1/chart/move': {
+        post: {
+          operationId: 'moveAccount',
+          summary: 'Move all balances from one account code to another',
+          description:
+            'Posts one manual journal entry per affected asset that zeroes `from` and credits `to`. ' +
+            'Cash accounts (`assets:stellar:*`) are refused. ' +
+            'If `from` already has a zero balance, nothing is posted and `moved` is 0.',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['from', 'to'],
+                  properties: {
+                    from: { type: 'string', description: 'Source account code.' },
+                    to: { type: 'string', description: 'Destination account code.' },
+                    note: { type: 'string', description: 'Entry description.' },
+                    effectiveAt: { type: 'string', format: 'date-time', description: 'Date the entry is posted; defaults to now.' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            '200': ok('MoveAccountResult'),
+            '409': problem('The effective date falls inside a closed accounting period (`resolution_refused`).'),
+            '422': problem('`from` is a cash account (`invalid_request`).'),
+            ...errors,
+          },
+        },
+      },
     },
     components: {
       securitySchemes: {
         apiKey: { type: 'http', scheme: 'bearer', description: 'An API key; it decides the tenant.' },
       },
-      schemas: components,
+      schemas: {
+        ...components,
+        TrialBalanceLine: {
+          type: 'object',
+          required: ['account', 'asset', 'totalDebits', 'totalCredits', 'netBalance'],
+          properties: {
+            account: { type: 'string' },
+            asset: { type: 'string' },
+            totalDebits: { type: 'string', description: 'Decimal string.' },
+            totalCredits: { type: 'string', description: 'Decimal string.' },
+            netBalance: { type: 'string', description: 'Signed decimal string; positive = debit balance.' },
+          },
+        },
+        TrialBalanceReport: {
+          type: 'object',
+          required: ['balanced', 'assetTotals', 'lines'],
+          properties: {
+            balanced: { type: 'boolean' },
+            assetTotals: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['asset', 'net'],
+                properties: { asset: { type: 'string' }, net: { type: 'string' } },
+              },
+            },
+            lines: { type: 'array', items: { $ref: '#/components/schemas/TrialBalanceLine' } },
+          },
+        },
+        AccountLedgerLine: {
+          type: 'object',
+          required: ['entryId', 'seq', 'kind', 'effectiveAt', 'postedAt', 'description', 'side', 'amount', 'asset', 'movementId', 'runningBalance'],
+          properties: {
+            entryId: { type: 'string' },
+            seq: { type: 'integer' },
+            kind: { type: 'string' },
+            effectiveAt: { type: 'string', format: 'date-time' },
+            postedAt: { type: 'string', format: 'date-time' },
+            description: { type: 'string' },
+            side: { enum: ['debit', 'credit'] },
+            amount: { type: 'string' },
+            asset: { type: 'string' },
+            movementId: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+            runningBalance: { type: 'string', description: 'Signed decimal string; positive = debit balance.' },
+          },
+        },
+        AccountLedgerReport: {
+          type: 'object',
+          required: ['account', 'asset', 'openingBalance', 'closingBalance', 'lines'],
+          properties: {
+            account: { type: 'string' },
+            asset: { type: 'string' },
+            openingBalance: { type: 'string' },
+            closingBalance: { type: 'string' },
+            lines: { type: 'array', items: { $ref: '#/components/schemas/AccountLedgerLine' } },
+          },
+        },
+        BalanceSheetSection: {
+          type: 'object',
+          required: ['kind', 'accounts'],
+          properties: {
+            kind: { enum: ['asset', 'liability', 'equity'] },
+            accounts: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['account', 'asset', 'balance'],
+                properties: { account: { type: 'string' }, asset: { type: 'string' }, balance: { type: 'string' } },
+              },
+            },
+          },
+        },
+        BalanceSheetReport: {
+          type: 'object',
+          required: ['asOf', 'balanced', 'currentEarnings', 'sections'],
+          properties: {
+            asOf: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
+            balanced: { type: 'boolean' },
+            currentEarnings: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['asset', 'amount'],
+                properties: { asset: { type: 'string' }, amount: { type: 'string' } },
+              },
+            },
+            sections: { type: 'array', items: { $ref: '#/components/schemas/BalanceSheetSection' } },
+          },
+        },
+        IncomeStatementLine: {
+          type: 'object',
+          required: ['account', 'kind', 'asset', 'amount'],
+          properties: {
+            account: { type: 'string' },
+            kind: { enum: ['income', 'expense'] },
+            asset: { type: 'string' },
+            amount: { type: 'string', description: 'Positive = net income / net expense.' },
+          },
+        },
+        IncomeStatementReport: {
+          type: 'object',
+          required: ['from', 'to', 'lines', 'netResult'],
+          properties: {
+            from: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
+            to: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
+            lines: { type: 'array', items: { $ref: '#/components/schemas/IncomeStatementLine' } },
+            netResult: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['asset', 'amount'],
+                properties: { asset: { type: 'string' }, amount: { type: 'string', description: 'Positive = profit.' } },
+              },
+            },
+          },
+        },
+        MoveAccountResult: {
+          type: 'object',
+          required: ['moved', 'assets'],
+          properties: {
+            moved: { type: 'integer', description: 'Number of journal entries posted (one per asset).' },
+            assets: { type: 'array', items: { type: 'string' }, description: 'Assets that had balances moved.' },
+          },
+        },
+      },
     },
   }
 }

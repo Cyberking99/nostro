@@ -18,16 +18,21 @@ import {
   NotFoundError,
   PrecisionError,
   ValidationError,
+  accountLedger,
   allocationJson,
+  balanceSheet,
   decideException,
   exceptionJson,
   expectationJson,
+  incomeStatement,
   journalCsvRows,
   journalEntryJson,
+  moveAccount,
   movementJson,
   outboxEventJson,
   parseAsset,
   resolutionJson,
+  trialBalance,
 } from '@nostro-labs/nostro'
 import type { Authenticate } from './auth.js'
 import { buildOpenApi } from './openapi.js'
@@ -313,6 +318,158 @@ export function createServer(options: ServerOptions): FastifyInstance {
             .type('text/csv; charset=utf-8')
             .header('content-disposition', 'attachment; filename="journal.csv"')
             .send(Readable.from(rows))
+        },
+      )
+
+      // ---- Reports (issue #56, #57) ----------------------------------------
+
+      v1.get<{ Querystring: { asOf?: string } }>(
+        '/reports/trial-balance',
+        { schema: { querystring: { type: 'object', additionalProperties: false, properties: { asOf: { type: 'string', format: 'date-time' } } } } },
+        async ({ tenantId, query: q }) => {
+          const asOf = q.asOf !== undefined ? new Date(q.asOf) : undefined
+          const report = await trialBalance({ store, tenantId, ...(asOf !== undefined ? { asOf } : {}) })
+          return {
+            balanced: report.balanced,
+            assetTotals: report.assetTotals.map((t) => ({ asset: t.asset, net: t.net.toString() })),
+            lines: report.lines.map((l) => ({
+              account: l.account,
+              asset: l.asset,
+              totalDebits: l.totalDebits.toString(),
+              totalCredits: l.totalCredits.toString(),
+              netBalance: l.netBalance.toString(),
+            })),
+          }
+        },
+      )
+
+      v1.get<{ Querystring: { account: string; asset: string; from?: string; to?: string } }>(
+        '/reports/ledger',
+        {
+          schema: {
+            querystring: {
+              type: 'object',
+              required: ['account', 'asset'],
+              additionalProperties: false,
+              properties: {
+                account: { type: 'string' },
+                asset: { type: 'string' },
+                from: { type: 'string', format: 'date-time' },
+                to: { type: 'string', format: 'date-time' },
+              },
+            },
+          },
+        },
+        async ({ tenantId, query: q }) => {
+          const from = q.from !== undefined ? new Date(q.from) : undefined
+          const to = q.to !== undefined ? new Date(q.to) : undefined
+          const ledger = await accountLedger({ store, tenantId, account: q.account, asset: q.asset, from, to })
+          return {
+            account: ledger.account,
+            asset: ledger.asset,
+            openingBalance: ledger.openingBalance.toString(),
+            closingBalance: ledger.closingBalance.toString(),
+            lines: ledger.lines.map((l) => ({
+              entryId: l.entryId,
+              seq: l.seq,
+              kind: l.kind,
+              effectiveAt: l.effectiveAt.toISOString(),
+              postedAt: l.postedAt.toISOString(),
+              description: l.description,
+              side: l.side,
+              amount: l.amount.toString(),
+              asset: l.amount.asset,
+              movementId: l.movementId,
+              runningBalance: l.runningBalance.toString(),
+            })),
+          }
+        },
+      )
+
+      v1.get<{ Querystring: { asOf?: string } }>(
+        '/reports/balance-sheet',
+        { schema: { querystring: { type: 'object', additionalProperties: false, properties: { asOf: { type: 'string', format: 'date-time' } } } } },
+        async ({ tenantId, query: q }) => {
+          const asOf = q.asOf !== undefined ? new Date(q.asOf) : undefined
+          const bs = await balanceSheet({ store, tenantId, ...(asOf !== undefined ? { asOf } : {}) })
+          return {
+            asOf: bs.asOf?.toISOString() ?? null,
+            balanced: bs.balanced,
+            currentEarnings: bs.currentEarnings.map((e) => ({ asset: e.asset, amount: e.amount.toString() })),
+            sections: bs.sections.map((s) => ({
+              kind: s.kind,
+              accounts: s.accounts.map((a) => ({ account: a.account, asset: a.asset, balance: a.balance.toString() })),
+            })),
+          }
+        },
+      )
+
+      v1.get<{ Querystring: { from?: string; to?: string } }>(
+        '/reports/income',
+        { schema: { querystring: { type: 'object', additionalProperties: false, properties: { from: { type: 'string', format: 'date-time' }, to: { type: 'string', format: 'date-time' } } } } },
+        async ({ tenantId, query: q }) => {
+          const from = q.from !== undefined ? new Date(q.from) : undefined
+          const to = q.to !== undefined ? new Date(q.to) : undefined
+          const stmt = await incomeStatement({ store, tenantId, from, to })
+          return {
+            from: stmt.from?.toISOString() ?? null,
+            to: stmt.to?.toISOString() ?? null,
+            netResult: stmt.netResult.map((r) => ({ asset: r.asset, amount: r.amount.toString() })),
+            lines: stmt.lines.map((l) => ({
+              account: l.account,
+              kind: l.kind,
+              asset: l.asset,
+              amount: l.amount.toString(),
+            })),
+          }
+        },
+      )
+
+      // ---- Account migration (issue #55) ------------------------------------
+
+      v1.post<{ Body: { from: string; to: string; note?: string; effectiveAt?: string } }>(
+        '/chart/move',
+        {
+          schema: {
+            body: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['from', 'to'],
+              properties: {
+                from: { type: 'string', minLength: 1, maxLength: 256 },
+                to: { type: 'string', minLength: 1, maxLength: 256 },
+                note: { type: 'string', minLength: 1, maxLength: 2000 },
+                effectiveAt: { type: 'string', format: 'date-time' },
+              },
+            },
+          },
+          preValidation: async (request) => {
+            if (typeof (request.body as Record<string, unknown>)?.from !== 'string' ||
+                typeof (request.body as Record<string, unknown>)?.to !== 'string') {
+              throw new HttpProblem(400, 'invalid_request', 'body.from and body.to must be strings.')
+            }
+          },
+        },
+        async ({ tenantId, body }) => {
+          try {
+            const result = await moveAccount({
+              store,
+              tenantId,
+              from: body.from,
+              to: body.to,
+              ...(body.note !== undefined ? { note: body.note } : {}),
+              ...(body.effectiveAt !== undefined ? { effectiveAt: new Date(body.effectiveAt) } : {}),
+            })
+            return { moved: result.moved, assets: result.assets }
+          } catch (err) {
+            if (err instanceof Error && err.message.includes('cash account')) {
+              throw new HttpProblem(422, 'invalid_request', err.message)
+            }
+            if (err instanceof ConstraintError && err.constraint === 'journal_period_closed') {
+              throw new HttpProblem(409, 'resolution_refused', err.message)
+            }
+            throw err
+          }
         },
       )
     },

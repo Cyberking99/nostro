@@ -258,6 +258,7 @@ abstract class MemoryReader implements StoreReader {
       if (q.afterSeq !== undefined && e.seq <= q.afterSeq) continue
       if (q.effectiveFrom !== undefined && e.effectiveAt.getTime() < q.effectiveFrom.getTime()) continue
       if (q.effectiveBefore !== undefined && e.effectiveAt.getTime() >= q.effectiveBefore.getTime()) continue
+      if (q.account !== undefined && !e.lines.some((l) => l.account === q.account)) continue
       out.push(e)
     }
     out.sort((a, b) => a.seq - b.seq)
