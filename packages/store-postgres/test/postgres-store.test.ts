@@ -56,12 +56,12 @@ if (pool === undefined) {
       const schema = `nostro_test_${randomUUID().replaceAll('-', '').slice(0, 16)}`
       schemas.push(schema)
       const store = new PostgresStore({ pool: pool!, schema })
-      expect(await store.schemaVersion()).toEqual({ current: 0, latest: 3 })
-      expect(await store.schemaVersion()).toEqual({ current: 0, latest: 3 })
+      expect(await store.schemaVersion()).toEqual({ current: 0, latest: 4 })
+      expect(await store.schemaVersion()).toEqual({ current: 0, latest: 4 })
       await store.migrate()
-      expect(await store.schemaVersion()).toEqual({ current: 3, latest: 3 })
+      expect(await store.schemaVersion()).toEqual({ current: 4, latest: 4 })
       await pool.query(`DELETE FROM "${schema}".migrations WHERE version = 3`)
-      expect(await store.schemaVersion()).toEqual({ current: 2, latest: 3 })
+      expect(await store.schemaVersion()).toEqual({ current: 2, latest: 4 })
     })
 
     it('commits events in seq order, so a reader after a seq can never miss one', async () => {

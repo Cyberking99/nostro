@@ -42,6 +42,7 @@ import type {
   ExpectationQuery,
   InsertMovementsResult,
   JournalQuery,
+  JournalPeriod,
   MovementConflict,
   MovementQuery,
   Resolution,
@@ -55,6 +56,8 @@ import {
   checkCursorValue,
   checkDisposition,
   checkJournalEntry,
+  checkJournalPeriodClose,
+  checkJournalPeriodReopen,
   checkResolution,
   storedMemo,
   sameFacts,
@@ -87,6 +90,14 @@ interface State {
   readonly events: Map<string, OutboxEvent>
   /** Movement id → its entry ids in posting order. Arrays are replaced, never pushed to. */
   readonly journalByMovement: Map<string, readonly string[]>
+  periodActions: readonly {
+    readonly tenantId: string
+    readonly action: 'close' | 'reopen'
+    readonly through: Date | null
+    readonly note: string | null
+    readonly reason: string | null
+    readonly at: Date
+  }[]
 }
 
 function emptyState(): State {
@@ -104,6 +115,7 @@ function emptyState(): State {
     journalByMovement: new Map(),
     eventSeq: 0,
     events: new Map(),
+    periodActions: [],
   }
 }
 
@@ -123,6 +135,7 @@ function cloneState(s: State): State {
     journalByMovement: new Map(s.journalByMovement),
     eventSeq: s.eventSeq,
     events: new Map(s.events),
+    periodActions: [...s.periodActions],
   }
 }
 
@@ -255,6 +268,24 @@ abstract class MemoryReader implements StoreReader {
     this.check()
     return this.snapshot().cursors.get(cursorKey(k)) ?? null
   }
+
+  async getJournalPeriod(tenantId: string): Promise<JournalPeriod | null> {
+    this.check()
+    const actions = this.snapshot().periodActions
+    for (let i = actions.length - 1; i >= 0; i--) {
+      const action = actions[i]!
+      if (action.tenantId !== tenantId) continue
+      return action.action === 'close'
+        ? Object.freeze({
+            tenantId,
+            through: copyDate(action.through!),
+            note: action.note,
+            closedAt: copyDate(action.at),
+          })
+        : null
+    }
+    return null
+  }
 }
 
 class MemoryTx extends MemoryReader implements StoreTx {
@@ -278,6 +309,31 @@ class MemoryTx extends MemoryReader implements StoreTx {
 
   protected override check(): void {
     if (!this.open) throw new TransactionClosedError()
+  }
+
+  async lockJournalPeriod(tenantId: string): Promise<JournalPeriod | null> {
+    this.check()
+    return this.getJournalPeriod(tenantId)
+  }
+
+  async closeJournalPeriod(tenantId: string, through: Date, note: string | null): Promise<void> {
+    this.check()
+    checkJournalPeriodClose(tenantId, through, note)
+    await this.lockJournalPeriod(tenantId)
+    this.draft.periodActions = [
+      ...this.draft.periodActions,
+      Object.freeze({ tenantId, action: 'close', through: copyDate(through), note, reason: null, at: this.now() }),
+    ]
+  }
+
+  async reopenJournalPeriod(tenantId: string, reason: string): Promise<void> {
+    this.check()
+    const period = await this.lockJournalPeriod(tenantId)
+    checkJournalPeriodReopen(tenantId, reason, period !== null)
+    this.draft.periodActions = [
+      ...this.draft.periodActions,
+      Object.freeze({ tenantId, action: 'reopen', through: null, note: null, reason, at: this.now() }),
+    ]
   }
 
   private movement(tenantId: string, id: string): Movement {
@@ -475,9 +531,12 @@ class MemoryTx extends MemoryReader implements StoreTx {
   async postJournalEntry(n: NewJournalEntry): Promise<JournalEntry> {
     this.check()
     assertValidNewJournalEntry(n)
+    const period = await this.lockJournalPeriod(n.tenantId)
     const movement = n.movementId == null ? null : this.movement(n.tenantId, n.movementId)
     const existing = movement === null ? [] : await this.listJournalEntries({ tenantId: n.tenantId, movementId: movement.id })
-    checkJournalEntry(n, movement, existing)
+    const now = this.now()
+    const entryToPost = { ...n, effectiveAt: n.effectiveAt ?? now }
+    checkJournalEntry(entryToPost, movement, existing, period?.through ?? null)
     for (const line of n.lines) {
       if (line.expectationId != null) this.expectation(n.tenantId, line.expectationId)
       if (line.exceptionId != null) {
@@ -485,7 +544,6 @@ class MemoryTx extends MemoryReader implements StoreTx {
         if (x === undefined || x.tenantId !== n.tenantId) throw new NotFoundError('exception', line.exceptionId)
       }
     }
-    const now = this.now()
     const entry: JournalEntry = Object.freeze({
       id: this.ids(),
       tenantId: n.tenantId,
@@ -493,7 +551,7 @@ class MemoryTx extends MemoryReader implements StoreTx {
       movementId: movement?.id ?? null,
       postingNo: n.postingNo ?? null,
       kind: n.kind,
-      effectiveAt: copyDate(n.effectiveAt ?? now),
+      effectiveAt: copyDate(entryToPost.effectiveAt),
       postedAt: now,
       description: n.description,
       lines: Object.freeze(

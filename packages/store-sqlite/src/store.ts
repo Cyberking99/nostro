@@ -26,6 +26,7 @@ import type {
   ExpectationQuery,
   InsertMovementsResult,
   JournalEntry,
+  JournalPeriod,
   JournalQuery,
   Json,
   Memo,
@@ -60,6 +61,8 @@ import {
   checkCursorValue,
   checkDisposition,
   checkJournalEntry,
+  checkJournalPeriodClose,
+  checkJournalPeriodReopen,
   checkResolution,
   exceptionChanged,
   expectationChanged,
@@ -374,6 +377,20 @@ class SqliteReader implements StoreReader {
     )
     return row === undefined ? null : (row.value as string)
   }
+
+  async getJournalPeriod(tenantId: string): Promise<JournalPeriod | null> {
+    const row = this.one(
+      'SELECT action, closed_through, note, created_at FROM journal_period_actions WHERE tenant_id = ? ORDER BY seq DESC LIMIT 1',
+      [tenantId],
+    )
+    if (row === undefined || row.action !== 'close') return null
+    return Object.freeze({
+      tenantId,
+      through: new Date(row.closed_through as number),
+      note: row.note as string | null,
+      closedAt: new Date(row.created_at as number),
+    })
+  }
 }
 
 class SqliteTx extends SqliteReader implements StoreTx {
@@ -392,6 +409,30 @@ class SqliteTx extends SqliteReader implements StoreTx {
 
   close(): void {
     this.open = false
+  }
+
+  async lockJournalPeriod(tenantId: string): Promise<JournalPeriod | null> {
+    return this.getJournalPeriod(tenantId)
+  }
+
+  async closeJournalPeriod(tenantId: string, through: Date, note: string | null): Promise<void> {
+    checkJournalPeriodClose(tenantId, through, note)
+    await this.lockJournalPeriod(tenantId)
+    this.one(
+      `INSERT INTO journal_period_actions (tenant_id, action, closed_through, note, reason, created_at)
+       VALUES (?, 'close', ?, ?, NULL, ?)`,
+      [tenantId, through.getTime(), note, this.now().getTime()],
+    )
+  }
+
+  async reopenJournalPeriod(tenantId: string, reason: string): Promise<void> {
+    const period = await this.lockJournalPeriod(tenantId)
+    checkJournalPeriodReopen(tenantId, reason, period !== null)
+    this.one(
+      `INSERT INTO journal_period_actions (tenant_id, action, closed_through, note, reason, created_at)
+       VALUES (?, 'reopen', NULL, NULL, ?, ?)`,
+      [tenantId, reason, this.now().getTime()],
+    )
   }
 
   private exec(sql: string, params: readonly Param[]): void {
@@ -610,21 +651,24 @@ class SqliteTx extends SqliteReader implements StoreTx {
 
   async postJournalEntry(n: NewJournalEntry): Promise<JournalEntry> {
     assertValidNewJournalEntry(n)
+    const period = await this.lockJournalPeriod(n.tenantId)
     // Transactions are serialised, so no other poster can append between this read and the insert.
     const movement = n.movementId == null ? null : this.movement(n.tenantId, n.movementId)
     const existing = movement === null ? [] : await this.listJournalEntries({ tenantId: n.tenantId, movementId: movement.id })
-    checkJournalEntry(n, movement, existing)
+    const now = this.now()
+    const entryToPost = { ...n, effectiveAt: n.effectiveAt ?? now }
+    checkJournalEntry(entryToPost, movement, existing, period?.through ?? null)
     for (const line of n.lines) {
       if (line.expectationId != null) this.expectation(n.tenantId, line.expectationId)
       if (line.exceptionId != null && (await this.getException(n.tenantId, line.exceptionId)) === null) {
         throw new NotFoundError('exception', line.exceptionId)
       }
     }
-    const now = this.now().getTime()
+    const nowMs = now.getTime()
     const entry = this.one(
       `INSERT INTO journal_entries (id, tenant_id, movement_id, posting_no, kind, effective_at, posted_at, description)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
-      [this.ids(), n.tenantId, movement?.id ?? null, n.postingNo ?? null, n.kind, n.effectiveAt?.getTime() ?? now, now, n.description],
+      [this.ids(), n.tenantId, movement?.id ?? null, n.postingNo ?? null, n.kind, entryToPost.effectiveAt.getTime(), nowMs, n.description],
     )!
     const lines = n.lines.map(
       (l, i) =>

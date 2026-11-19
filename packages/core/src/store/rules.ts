@@ -210,6 +210,32 @@ export function checkCursorValue(value: string): void {
   assertStorableText('cursor', value)
 }
 
+export function checkJournalPeriodClose(tenantId: string, through: Date, note: string | null): void {
+  if (typeof tenantId !== 'string' || tenantId.trim() === '') {
+    throw new ValidationError('tenantId', 'must be a non-empty string')
+  }
+  assertStorableText('tenantId', tenantId)
+  if (!(through instanceof Date) || Number.isNaN(through.getTime())) {
+    throw new ValidationError('through', 'must be a valid date')
+  }
+  if (note !== null) {
+    if (typeof note !== 'string' || note.trim() === '') throw new ValidationError('note', 'must be non-empty')
+    assertStorableText('note', note)
+  }
+}
+
+export function checkJournalPeriodReopen(tenantId: string, reason: string, isClosed: boolean): void {
+  if (typeof tenantId !== 'string' || tenantId.trim() === '') {
+    throw new ValidationError('tenantId', 'must be a non-empty string')
+  }
+  assertStorableText('tenantId', tenantId)
+  if (typeof reason !== 'string' || reason.trim() === '') {
+    throw new ValidationError('reason', 'must be a non-empty string')
+  }
+  assertStorableText('reason', reason)
+  if (!isClosed) throw new ConstraintError('journal_period_not_closed', `tenant ${tenantId} has no closed period`)
+}
+
 /** Roles whose lines are the movement's own balance: a wallet's cash, or an issuer's issued supply. */
 const BALANCE_ROLES: ReadonlySet<LineRole> = new Set(['cash', 'issued'])
 
@@ -232,7 +258,15 @@ export function checkJournalEntry(
   entry: NewJournalEntry,
   movement: Movement | null,
   existing: readonly JournalEntry[],
+  closedThrough: Date | null = null,
 ): void {
+  const effectiveAt = entry.effectiveAt
+  if (closedThrough !== null && effectiveAt !== undefined && effectiveAt.getTime() <= closedThrough.getTime()) {
+    throw new ConstraintError(
+      'journal_period_closed',
+      `effective date ${effectiveAt.toISOString()} is on or before the close through ${closedThrough.toISOString()}`,
+    )
+  }
   const net = new Map<string, bigint>()
   for (const line of entry.lines) {
     const key = `${line.amount.asset}/${line.amount.decimals}`

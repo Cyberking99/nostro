@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
@@ -79,9 +79,9 @@ describe('nostro migrate', () => {
     const file = join(cwd, 'nostro.db')
     expect(await nostro(cwd, ['migrate'])).toMatchObject({
       code: 0,
-      stdout: `Migrated ${file} from schema version 0 to 4.\n`,
+      stdout: `Migrated ${file} from schema version 0 to 5.\n`,
     })
-    expect((await nostro(cwd, ['migrate'])).stdout).toBe(`${file} is up to date (schema version 4).\n`)
+    expect((await nostro(cwd, ['migrate'])).stdout).toBe(`${file} is up to date (schema version 5).\n`)
     expect(JSON.parse((await nostro(cwd, ['migrate', '--json'])).stdout)).toEqual({ database: file, from: 4, to: 4 })
   })
 
@@ -104,7 +104,7 @@ describe('nostro migrate', () => {
     setVersion(join(cwd, 'nostro.db'), 99)
     const { code, stderr } = await nostro(cwd, ['migrate'])
     expect(code).toBe(1)
-    expect(stderr).toMatch(/schema version 99, newer than this nostro understands \(4\)\. Upgrade @nostro-labs\/cli; nothing was changed/)
+    expect(stderr).toMatch(/schema version 99, newer than this nostro understands \(5\)\. Upgrade @nostro-labs\/cli; nothing was changed/)
   })
 
   it('refuses an in-memory database, which would vanish when it exits', async () => {
@@ -114,6 +114,36 @@ describe('nostro migrate', () => {
         stderr: 'nostro: --db must name a database file or a postgres:// URL.\n',
       })
     }
+  })
+})
+
+describe('nostro period', () => {
+  it('closes through the inclusive end of a UTC date and requires a reason to reopen', async () => {
+    const cwd = await migrated()
+    const closed = await nostro(cwd, ['period', 'close', '--through', '2026-10-31', '--note', 'Reported'])
+    expect(closed).toMatchObject({
+      code: 0,
+      stdout: 'Closed default through 2026-10-31T23:59:59.999Z.\n',
+    })
+    expect((await nostro(cwd, ['period', 'reopen'])).code).toBe(2)
+    const reopened = await nostro(cwd, ['period', 'reopen', '--reason', 'Source correction'])
+    expect(reopened).toMatchObject({
+      code: 0,
+      stdout: 'Reopened default: Source correction\n',
+    })
+  })
+})
+
+describe('nostro export formats', () => {
+  it('requires explicit account and commodity maps for mapped formats', async () => {
+    const cwd = await migrated()
+    expect(await nostro(cwd, ['export', '--format', 'quickbooks'])).toMatchObject({ code: 2 })
+    expect(await nostro(cwd, ['export', '--format', 'xero'])).toMatchObject({ code: 2 })
+    expect(await nostro(cwd, ['export', '--format', 'beancount'])).toMatchObject({ code: 2 })
+
+    writeFileSync(join(cwd, 'commodities.json'), '{}')
+    const beancount = await nostro(cwd, ['export', '--format', 'beancount', '--commodity-map', 'commodities.json'])
+    expect(beancount).toMatchObject({ code: 0, stdout: '' })
   })
 })
 
@@ -132,7 +162,7 @@ describe('opening a database', () => {
     await new SqliteStore({ filename: file }).close()
     expect((await nostro(cwd, ['reconcile'])).stderr).toBe(`nostro: ${file} has not been set up. Run "nostro migrate" first.\n`)
     setVersion(file, 1)
-    expect((await nostro(cwd, ['reconcile'])).stderr).toContain('is at schema version 1; this nostro needs 4. Run "nostro migrate".')
+    expect((await nostro(cwd, ['reconcile'])).stderr).toContain('is at schema version 1; this nostro needs 5. Run "nostro migrate".')
     setVersion(file, 99)
     const ahead = await nostro(cwd, ['reconcile'])
     expect(ahead.code).toBe(1)
@@ -160,7 +190,7 @@ describe('opening a database', () => {
     try {
       const first = await nostro(cwd, ['migrate'], { env })
       expect(first.code).toBe(0)
-      expect(first.stdout).toContain(`(schema ${schema}) from schema version 0 to 3.`)
+      expect(first.stdout).toContain(`(schema ${schema}) from schema version 0 to 4.`)
       expect(first.stdout).not.toContain(':nostro@')
       const synced = await nostro(cwd, ['sync', '--account', A, '--json'], { env, fetch: paid().fetch })
       expect(synced.code).toBe(0)

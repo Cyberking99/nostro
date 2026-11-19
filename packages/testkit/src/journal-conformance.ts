@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { JournalQuery, Movement, NewJournalEntry, NewJournalLine, Store } from '@nostro-labs/nostro'
-import { Money, NotFoundError, ValidationError, asset } from '@nostro-labs/nostro'
+import { Money, NotFoundError, ValidationError, asset, closePeriod, postMovement, reopenPeriod } from '@nostro-labs/nostro'
 
 const T = 'tenant-a'
 const T2 = 'tenant-b'
@@ -191,6 +191,85 @@ export function describeJournalConformance(name: string, makeStore: () => Store 
         ],
       })
       expect(manual).toMatchObject({ movementId: null, postingNo: null })
+    })
+
+    it('refuses closed dates, then permits them after a reasoned reopen', async () => {
+      const m = await movement()
+      const through = new Date('2026-10-05T12:00:00Z')
+      await closePeriod({ store, tenantId: T, through, note: 'Month-end reported' })
+      await expect(post(entry(m))).rejects.toMatchObject(constraint('journal_period_closed'))
+
+      const otherTenantEntry = await post({
+        tenantId: T2,
+        kind: 'reclass',
+        effectiveAt: through,
+        description: 'Other tenant period remains open',
+        lines: lines(m.amount),
+      })
+      expect(otherTenantEntry.tenantId).toBe(T2)
+
+      await reopenPeriod({ store, tenantId: T, reason: 'Correcting a source statement' })
+      await expect(post(entry(m))).resolves.toMatchObject({ movementId: m.id })
+    })
+
+    it('moves a late automatic posting to the first open instant and retains the source date', async () => {
+      const m = await movement()
+      const through = new Date('2026-10-05T12:00:00Z')
+      await closePeriod({ store, tenantId: T, through })
+      await store.transaction((tx) => tx.setDisposition(T, m.id, 'ignored', 'late movement'))
+      const posted = await store.transaction((tx) => postMovement(tx, T, m.id))
+      expect(posted).toMatchObject({
+        effectiveAt: new Date(through.getTime() + 1),
+        description: expect.stringContaining(m.occurredAt.toISOString()),
+      })
+      expect((await store.getMovement(T, m.id))!.occurredAt).toEqual(m.occurredAt)
+    })
+
+    it('rejects a correction whose effective date falls in the closed period', async () => {
+      const m = await movement()
+      await post(entry(m))
+      await closePeriod({ store, tenantId: T, through: m.occurredAt })
+      const correction = entry(m, {
+        postingNo: 2,
+        kind: 'correction',
+        lines: [
+          { account: CASH, role: 'cash', side: 'credit', amount: m.amount },
+          { account: 'liabilities:unapplied-receipts', role: 'unapplied', side: 'debit', amount: m.amount },
+        ],
+      })
+      await expect(post(correction)).rejects.toMatchObject(constraint('journal_period_closed'))
+    })
+
+    it('orders a concurrent close after a post already holding the tenant close lock', async () => {
+      const m = await movement()
+      let release!: () => void
+      let locked!: () => void
+      const gate = new Promise<void>((resolve) => (release = resolve))
+      const acquired = new Promise<void>((resolve) => (locked = resolve))
+      const posting = store.transaction(async (tx) => {
+        await tx.lockJournalPeriod(T)
+        locked()
+        await gate
+        return tx.postJournalEntry(entry(m))
+      })
+      await acquired
+
+      let closeFinished = false
+      const closing = store.transaction(async (tx) => {
+        await tx.closeJournalPeriod(T, m.occurredAt, 'Race test')
+        closeFinished = true
+      })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(closeFinished).toBe(false)
+      release()
+      await Promise.all([posting, closing])
+      await expect(post({
+        tenantId: T,
+        kind: 'reclass',
+        effectiveAt: m.occurredAt,
+        description: 'Must not pass the close',
+        lines: lines(m.amount),
+      })).rejects.toMatchObject(constraint('journal_period_closed'))
     })
 
     it('lists entries in posting order, filtered and scoped by tenant', async () => {
