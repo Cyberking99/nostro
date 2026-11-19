@@ -78,6 +78,14 @@ describe('nostro expect', () => {
     expect(text.stdout).toBe(`Recorded PAYROLL-8: 1.0000000 XLM to pay from ${A}.\n`)
   })
 
+  it('records a hash memo asked for with --memo-hash', async () => {
+    const cwd = await migrated()
+    const hash = 'a'.repeat(64)
+    const run = await nostro(cwd, ['expect', 'HASH-1', '--account', A, '--amount', '1', '--memo-hash', hash, '--json'])
+    expect(run.code).toBe(0)
+    expect(JSON.parse(run.stdout).memo).toEqual({ type: 'hash', value: hash })
+  })
+
   it('refuses a reference already recorded in the tenant, but not in another', async () => {
     const cwd = await migrated()
     const argv = ['expect', 'INV-1', '--account', A, '--amount', '1']
@@ -107,6 +115,10 @@ describe('nostro expect', () => {
       [['R', ...ok, '--memo-text', 'x'.repeat(29)], '1 to 28 bytes'],
       [['R', ...ok, '--memo-text', '\u00e9'.repeat(15)], '1 to 28 bytes'],
       [['R', ...ok, '--memo-id', '18446744073709551616'], '--memo-id must be a whole number below 2^64'],
+      [['R', ...ok, '--memo-hash', 'aa'], '--memo-hash must be exactly 64 lowercase hex characters'],
+      [['R', ...ok, '--memo-hash', 'A'.repeat(64)], '--memo-hash must be exactly 64 lowercase hex characters'],
+      [['R', ...ok, '--memo-hash', 'g'.repeat(64)], '--memo-hash must be exactly 64 lowercase hex characters'],
+      [['R', ...ok, '--memo-hash', 'a'.repeat(64), '--memo-id', '1'], '--memo-hash on its own'],
       [['R', ...ok, '--muxed-id=-1'], '--muxed-id must be a whole number below 2^64'],
       [['R', ...ok, '--payer', 'GABC'], '--payer "GABC" is not a G... account id'],
       [['R', ...ok, '--due', 'tomorrow'], '--due must be a date'],

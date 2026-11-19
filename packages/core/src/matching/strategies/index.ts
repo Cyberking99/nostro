@@ -2,11 +2,12 @@ import type { MatchStrategy } from '../types.js'
 import { exactAmountStrategy } from './exact-amount.js'
 import { knownPayerStrategy } from './known-payer.js'
 import { memoCrossTypeStrategy } from './memo-cross-type.js'
+import { memoHashStrategy } from './memo-hash.js'
 import { memoIdStrategy } from './memo-id.js'
 import { memoTextStrategy } from './memo-text.js'
 import { muxedIdStrategy } from './muxed-id.js'
 
-export { exactAmountStrategy, knownPayerStrategy, memoCrossTypeStrategy, memoIdStrategy, memoTextStrategy, muxedIdStrategy }
+export { exactAmountStrategy, knownPayerStrategy, memoCrossTypeStrategy, memoHashStrategy, memoIdStrategy, memoTextStrategy, muxedIdStrategy }
 
 /**
  * The default strategies, strongest first. The ordering and scores are
@@ -16,6 +17,7 @@ export { exactAmountStrategy, knownPayerStrategy, memoCrossTypeStrategy, memoIdS
 export const DEFAULT_STRATEGIES: readonly MatchStrategy[] = [
   muxedIdStrategy,
   memoIdStrategy,
+  memoHashStrategy,
   memoTextStrategy,
   memoCrossTypeStrategy,
   exactAmountStrategy,
