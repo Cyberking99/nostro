@@ -176,6 +176,40 @@ describe('decide: amounts', () => {
   })
 })
 
+describe('decide: known payers', () => {
+  it('scores a known payer alone as ambiguous, with the payer as evidence', () => {
+    const e = expectation({ payers: [PAYER], amount: usdc('99') })
+    const d = exception(decide(movement({ amount: usdc('3') }), [candidate(e)]))
+    expect(d.code).toBe('AMBIGUOUS_MATCH')
+    expect(d.detail).toMatch(/0.4, below the 0.7 threshold/)
+    expect(JSON.stringify(d.evidence)).toContain('known payer')
+  })
+
+  it('settles when a known payer corroborates the only candidate owed that amount', () => {
+    const e = expectation({ payers: [PAYER] })
+    const d = allocation(decide(movement(), [candidate(e)]))
+    expect(d).toMatchObject({ expectationId: e.id, score: 0.76 })
+  })
+
+  it('stays ambiguous when another candidate is owed the same amount', () => {
+    const known = expectation({ payers: [PAYER] })
+    const other = expectation()
+    const d = exception(decide(movement(), [candidate(known), candidate(other)]))
+    expect(d.code).toBe('AMBIGUOUS_MATCH')
+    const listed = (d.evidence as { candidates: { expectationId: string; score: number }[] }).candidates
+    expect(listed.map((c) => [c.expectationId, c.score])).toEqual([
+      [known.id, 0.52],
+      [other.id, 0.2],
+    ])
+  })
+
+  it('does not fire without a counterparty', () => {
+    const e = expectation({ payers: [PAYER], amount: usdc('99') })
+    const d = exception(decide(movement({ counterparty: null, amount: usdc('3') }), [candidate(e)]))
+    expect(d.code).toBe('MEMO_MISSING')
+  })
+})
+
 describe('decide: refusing a confident match', () => {
   it('refuses a lookalike asset with the same code but another issuer', () => {
     const e = expectation({ reference: 'INV-1' })
