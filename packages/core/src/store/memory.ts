@@ -21,6 +21,7 @@ import type {
   Disposition,
   ExceptionRecord,
   Expectation,
+  ExpectationChanges,
   JournalEntry,
   Movement,
   NewAllocation,
@@ -51,6 +52,7 @@ import type {
   StoreTx,
 } from './store.js'
 import {
+  amendExpectationRecord,
   checkAllocation,
   checkCancel,
   checkCursorValue,
@@ -59,12 +61,13 @@ import {
   checkJournalPeriodClose,
   checkJournalPeriodReopen,
   checkResolution,
+  issueMuxedId,
   storedMemo,
   sameFacts,
 } from './rules.js'
 import { ConstraintError, NotFoundError, TransactionClosedError } from './store.js'
 import type { EventQuery, NewOutboxEvent, OutboxEvent } from './events.js'
-import { exceptionChanged, expectationChanged, movementDecided } from './events.js'
+import { exceptionChanged, expectationAmended, expectationChanged, movementDecided } from './events.js'
 
 export interface MemoryStoreOptions {
   /** Id generator. Defaults to `crypto.randomUUID()`; inject one for deterministic tests. */
@@ -456,6 +459,26 @@ class MemoryTx extends MemoryReader implements StoreTx {
         `reference ${JSON.stringify(n.reference)} already exists in this tenant`,
       )
     }
+    let muxedId: bigint | null
+    if (n.muxedId === 'issue') {
+      let max = 0n
+      for (const e of this.draft.expectations.values()) {
+        if (e.tenantId === n.tenantId && e.account === n.account && e.muxedId !== null && e.muxedId > max) max = e.muxedId
+      }
+      muxedId = issueMuxedId(max)
+    } else {
+      muxedId = n.muxedId ?? null
+    }
+    if (muxedId !== null) {
+      for (const e of this.draft.expectations.values()) {
+        if (e.tenantId === n.tenantId && e.account === n.account && e.muxedId === muxedId) {
+          throw new ConstraintError(
+            'expectation_muxed_id_unique',
+            `muxed id ${muxedId.toString()} is already used on account ${n.account}`,
+          )
+        }
+      }
+    }
     const now = this.now()
     const expectation: Expectation = Object.freeze({
       id: this.ids(),
@@ -465,7 +488,7 @@ class MemoryTx extends MemoryReader implements StoreTx {
       account: n.account,
       direction: n.direction ?? 'credit',
       amount: n.amount,
-      muxedId: n.muxedId ?? null,
+      muxedId,
       memo: n.memo == null ? null : Object.freeze(storedMemo(n.memo)),
       payers: Object.freeze([...(n.payers ?? [])]),
       dueAt: n.dueAt == null ? null : copyDate(n.dueAt),
@@ -493,6 +516,25 @@ class MemoryTx extends MemoryReader implements StoreTx {
     })
     this.draft.expectations.set(id, next)
     this.emit(expectationChanged(next, null))
+    return next
+  }
+
+  async amendExpectation(tenantId: string, id: string, changes: ExpectationChanges, reason: string): Promise<Expectation> {
+    this.check()
+    const e = this.expectation(tenantId, id)
+    const allocations = this.allocationsOf('expectationId', e.id)
+    let muxedIdTaken = false
+    if (changes.muxedId !== undefined && changes.muxedId !== e.muxedId && changes.muxedId !== null) {
+      for (const other of this.draft.expectations.values()) {
+        if (other.id !== e.id && other.tenantId === tenantId && other.account === e.account && other.muxedId === changes.muxedId) {
+          muxedIdTaken = true
+          break
+        }
+      }
+    }
+    const next = amendExpectationRecord(e, allocations, changes, reason, this.now(), muxedIdTaken)
+    this.draft.expectations.set(id, next)
+    this.emit(expectationAmended(next, e, reason))
     return next
   }
 
