@@ -1,0 +1,82 @@
+{
+  "scenario": "create-account-starting-balance",
+  "network": "public",
+  "horizon": "https://horizon.stellar.org",
+  "capturedAt": "2026-11-19T09:32:28+00:00",
+  "sources": [
+    "https://horizon.stellar.org/operations/281572158936276997?join=transactions",
+    "https://horizon.stellar.org/operations/281572158936276997/effects"
+  ],
+  "operation": {
+    "id": "281572158936276997",
+    "paging_token": "281572158936276997",
+    "transaction_successful": true,
+    "source_account": "GCWB3T4MQEGXN6SYLRS35IRQSBA7P5GKYVGXNAJQXM6WIRVIIY6SXDJL",
+    "type": "create_account",
+    "type_i": 0,
+    "created_at": "2026-11-19T09:06:18Z",
+    "transaction_hash": "86577db02b1bf7561d9f5daafd8e32502e3c49b2843b407ee05ce4ed52b85f8c",
+    "transaction": {
+      "id": "86577db02b1bf7561d9f5daafd8e32502e3c49b2843b407ee05ce4ed52b85f8c",
+      "paging_token": "281572158936276992",
+      "successful": true,
+      "hash": "86577db02b1bf7561d9f5daafd8e32502e3c49b2843b407ee05ce4ed52b85f8c",
+      "ledger": 65558627,
+      "created_at": "2026-11-19T09:06:18Z",
+      "source_account": "GCWB3T4MQEGXN6SYLRS35IRQSBA7P5GKYVGXNAJQXM6WIRVIIY6SXDJL",
+      "source_account_sequence": "270410127344360042",
+      "fee_account": "GCWB3T4MQEGXN6SYLRS35IRQSBA7P5GKYVGXNAJQXM6WIRVIIY6SXDJL",
+      "fee_charged": "500",
+      "max_fee": "1000",
+      "operation_count": 5,
+      "envelope_xdr": "AAAAAgAAAACsHc+MgQ12+lhcZb6iMJBB9/TKxU12gTC7PWRGqEY9KwAAA+gDwLCUAAdaagAAAAEAAAAAAAAAAAAAAABq/rwjAAAAAAAAAAUAAAAAAAAAAAAAAADmokhj9mw6P3sx72mwb9H8qzyRVR4w3Gg+x5e/7eXaGAAAAAAA5OHAAAAAAAAAAAAAAAAAICpLC+LlvrGIdgVy3TWaj7lbPUuPg/d4Eknpt86sZ/EAAAAAAOThwAAAAAAAAAAAAAAAALr0TKwkONUC5UPXJayXTYUmEcFIcVwa/Z6klqACxfsFAAAAAADk4cAAAAAAAAAAAAAAAAAfC0XNK+JuWoAtoXuIcg7eQre+3rUrrQUqlaywjGSvFQAAAAAA5OHAAAAAAAAAAAAAAAAAAlShiO6GIgh/zJjSFE0mFRIlynwEzUL9ooVcboc4P/QAAAAAAOThwAAAAAAAAAABqEY9KwAAAEAiA5ytCPcMysHGS01a61D5/wPFj8SX7hrgFtna0JWnmQUrqoUNBVUGOEbFczk3EVIVewJKY4tkUb8qyVta7owD",
+      "result_xdr": "AAAAAAAAAfQAAAAAAAAABQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "fee_meta_xdr": "AAAAAgAAAAMD6FhfAAAAAAAAAACsHc+MgQ12+lhcZb6iMJBB9/TKxU12gTC7PWRGqEY9KwAAABAsZnmUA8CwlAAHWmkAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAADAAAAAAPoWF0AAAAAav677AAAAAAAAAABA+hYYwAAAAAAAAAArB3PjIENdvpYXGW+ojCQQff0ysVNdoEwuz1kRqhGPSsAAAAQLGZ3oAPAsJQAB1ppAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAwAAAAAD6FhdAAAAAGr+u+wAAAAA",
+      "memo_type": "none",
+      "signatures": [
+        "IgOcrQj3DMrBxktNWutQ+f8DxY/El+4a4BbZ2tCVp5kFK6qFDQVVBjhGxXM5NxFSFXsCSmOLZFG/KslbWu6MAw=="
+      ],
+      "preconditions": {
+        "timebounds": {
+          "min_time": "0",
+          "max_time": "1795079203"
+        }
+      }
+    },
+    "starting_balance": "1.5000000",
+    "funder": "GCWB3T4MQEGXN6SYLRS35IRQSBA7P5GKYVGXNAJQXM6WIRVIIY6SXDJL",
+    "account": "GABFJIMI52DCECD7ZSMNEFCNEYKREJOKPQCM2QX5UKCVY3UHHA77JNL6"
+  },
+  "effects": [
+    {
+      "id": "0281572158936276997-0000000001",
+      "paging_token": "281572158936276997-1",
+      "account": "GABFJIMI52DCECD7ZSMNEFCNEYKREJOKPQCM2QX5UKCVY3UHHA77JNL6",
+      "type": "account_created",
+      "type_i": 0,
+      "created_at": "2026-11-19T09:06:18Z",
+      "starting_balance": "1.5000000"
+    },
+    {
+      "id": "0281572158936276997-0000000002",
+      "paging_token": "281572158936276997-2",
+      "account": "GCWB3T4MQEGXN6SYLRS35IRQSBA7P5GKYVGXNAJQXM6WIRVIIY6SXDJL",
+      "type": "account_debited",
+      "type_i": 3,
+      "created_at": "2026-11-19T09:06:18Z",
+      "asset_type": "native",
+      "amount": "1.5000000"
+    },
+    {
+      "id": "0281572158936276997-0000000003",
+      "paging_token": "281572158936276997-3",
+      "account": "GABFJIMI52DCECD7ZSMNEFCNEYKREJOKPQCM2QX5UKCVY3UHHA77JNL6",
+      "type": "signer_created",
+      "type_i": 10,
+      "created_at": "2026-11-19T09:06:18Z",
+      "weight": 1,
+      "public_key": "GABFJIMI52DCECD7ZSMNEFCNEYKREJOKPQCM2QX5UKCVY3UHHA77JNL6",
+      "key": ""
+    }
+  ]
+}
