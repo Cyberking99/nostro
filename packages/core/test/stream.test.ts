@@ -3,7 +3,7 @@
  *
  * No real network, no real timers. All tests use injected fakes.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { StreamWatcher } from '../src/ingest/stream.js'
 
 // ---------------------------------------------------------------------------

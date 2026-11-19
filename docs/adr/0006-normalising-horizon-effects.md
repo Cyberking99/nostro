@@ -47,7 +47,10 @@ unable to cross its own offers.
   that receive payments.
 - Effects and fees have separate cursors (`horizon` and `horizon-fees`), since they page different
   feeds.
-- **Known gap:** an ascending cursor older than Horizon's retention window is silently moved to the
-  oldest retained record instead of failing. Until history-window detection lands, I2 is the check
-  that notices.
+- An ascending cursor older than Horizon's retention window is silently moved to the oldest retained
+  record rather than failing. The sources now detect that window (a cursor older than
+  `history_elder_ledger`, or a first sync whose effects do not start with `account_created`) and
+  return a gap on `PullResult`; `sync()` opens one `SOURCE_GAP_DETECTED` for a person and keeps
+  ingesting. The fees feed can check a stored cursor the same way, but on a first sync only the
+  effects feed can tell an old account from a new one.
 - Real records backing each rule live in `fixtures/horizon/`.

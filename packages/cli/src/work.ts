@@ -11,6 +11,7 @@ export interface StreamProgress {
   inserted: number
   duplicates: number
   conflicts: number
+  gaps: number
   cursor: string | null
   caughtUp: boolean
   /** Another process advanced the cursor first; it is syncing this stream. */
@@ -22,6 +23,7 @@ function add(p: StreamProgress, r: AccountSyncReport): void {
   p.inserted += r.inserted
   p.duplicates += r.duplicates
   p.conflicts += r.conflicts
+  p.gaps += r.gaps
   p.cursor = r.cursor
   p.caughtUp = r.caughtUp
   p.contended = r.contended
@@ -50,6 +52,7 @@ export async function syncAll(options: SyncAllOptions): Promise<StreamProgress[]
       inserted: 0,
       duplicates: 0,
       conflicts: 0,
+      gaps: 0,
       cursor: null,
       caughtUp: false,
       contended: false,

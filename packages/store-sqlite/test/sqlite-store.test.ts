@@ -78,13 +78,13 @@ describe('SqliteStore', () => {
   it('migrates idempotently and records the schema version', async () => {
     const filename = freshFile()
     const store = new SqliteStore({ filename })
-    expect(await store.schemaVersion()).toEqual({ current: 0, latest: 5 })
+    expect(await store.schemaVersion()).toEqual({ current: 0, latest: 6 })
     await store.migrate()
     await store.migrate()
-    expect(await store.schemaVersion()).toEqual({ current: 5, latest: 5 })
+    expect(await store.schemaVersion()).toEqual({ current: 6, latest: 6 })
     await store.close()
     const db = new Database(filename, { readonly: true })
-    expect(db.pragma('user_version', { simple: true })).toBe(4)
+    expect(db.pragma('user_version', { simple: true })).toBe(6)
     expect(db.pragma('journal_mode', { simple: true })).toBe('wal')
     db.close()
   })
@@ -157,12 +157,40 @@ describe('SqliteStore', () => {
     await store.transaction((tx) => tx.setCursor({ tenantId: 't', network: 'n', source: 's', account: 'a' }, 'kept'))
     await store.close()
     const db = new Database(filename)
-    db.exec('DROP TABLE journal_lines; DROP TABLE journal_entries; DROP TABLE events; PRAGMA user_version = 1')
+    db.exec(
+      'DROP TABLE journal_lines; DROP TABLE journal_entries; DROP TABLE events; ' +
+        'DROP TABLE journal_period_actions; PRAGMA user_version = 1',
+    )
     db.close()
     const upgraded = await freshStore(filename)
     expect(await upgraded.getCursor({ tenantId: 't', network: 'n', source: 's', account: 'a' })).toBe('kept')
     expect(await upgraded.listJournalEntries({ tenantId: 't' })).toEqual([])
     expect(await upgraded.listEvents({ tenantId: 't' })).toEqual([])
+    await upgraded.close()
+  })
+
+  it('backfills the text-memo index when upgrading a database with existing rows', async () => {
+    const filename = freshFile()
+    const store = await freshStore(filename)
+    const e = await store.transaction((tx) =>
+      tx.insertExpectation({
+        tenantId: 't',
+        reference: 'INV-9',
+        account: `G${'A'.repeat(55)}`,
+        amount: Money.parse('10', NATIVE),
+        memo: { type: 'text', value: 'REF-8' },
+      }),
+    )
+    await store.close()
+    const db = new Database(filename)
+    db.exec('DROP TABLE expectation_reference_index; PRAGMA user_version = 5')
+    db.close()
+
+    const upgraded = await freshStore(filename)
+    const ids = async (key: string) => (await upgraded.getExpectationsByNormalizedReference('t', key)).map((x) => x.id)
+    expect(await ids('9')).toEqual([e.id])
+    expect(await ids('8')).toEqual([e.id])
+    expect(await ids('')).toEqual([])
     await upgraded.close()
   })
 

@@ -24,6 +24,8 @@ const after = (a: string, b: string) => {
   const [bo, bn] = position(b)
   return ao > bo || (ao === bo && an > bn)
 }
+/** The ledger a paging token belongs to, for `<toid>-<order>` and bare TOIDs. */
+const ledgerOf = (token: string): number => Number(BigInt(token.split('-')[0]!) >> 32n)
 
 export interface PaymentOptions {
   /** Whether the account operations feed lists it for both sides. Default true. */
@@ -43,6 +45,8 @@ export class FakeHorizon {
   /** Account entries served at `/accounts/{id}`, with `Latest-Ledger`. */
   accounts = new Map<string, HorizonAccount>()
   latestLedger = 1
+  /** Oldest ledger whose history is still kept. 0 means no retention window. */
+  elderLedger = 0
   gone = new Set<string>()
   requests: URL[] = []
 
@@ -59,12 +63,27 @@ export class FakeHorizon {
       let rows = [...all].sort((x, y) => (after(x.paging_token, y.paging_token) ? 1 : -1))
       if (desc) rows.reverse()
       if (cursor !== null) rows = rows.filter((r) => (desc ? after(cursor, r.paging_token) : after(r.paging_token, cursor)))
+      // Horizon answers an ascending read from before its window with the
+      // oldest record it still has, rather than with an error.
+      if (!desc && this.elderLedger > 0 && cursor !== null) {
+        const from = ledgerOf(cursor)
+        if (from > 0 && from < this.elderLedger) {
+          rows = rows.filter((r) => ledgerOf(r.paging_token) >= this.elderLedger)
+        }
+      }
       return respond({ _embedded: { records: rows.slice(0, Number(q.get('limit') ?? 10)) } })
     }
     const known = (account: string) =>
       this.effects.some((e) => e.account === account) || this.transactions.some((t) => t.participants.includes(account))
 
     let m: RegExpMatchArray | null
+    if (url.pathname === '/') {
+      return respond({
+        history_elder_ledger: this.elderLedger,
+        history_latest_ledger: this.latestLedger,
+        ingest_latest_ledger: this.latestLedger,
+      })
+    }
     if ((m = url.pathname.match(/^\/accounts\/(\w+)$/))) {
       const entry = this.accounts.get(m[1]!)
       return entry === undefined ? notFound() : respond(entry, 200, { 'latest-ledger': String(this.latestLedger) })
@@ -90,6 +109,24 @@ export class FakeHorizon {
 
   client(): HorizonClient {
     return new HorizonClient({ url: 'https://horizon.test', fetch: this.fetch, retries: 0 })
+  }
+
+  /**
+   * Record an account's creation in `ledger`. A complete effects history
+   * starts with `account_created`, which is how a first sync tells a young
+   * account from one whose early history Horizon has dropped.
+   */
+  createAccount(ledger: number, account: string): string {
+    const id = toid(ledger, 0)
+    this.effects.push({
+      id: `${id.padStart(19, '0')}-0000000000`,
+      paging_token: `${id}-0`,
+      account,
+      type: 'account_created',
+      created_at: '2026-10-06T00:00:00Z',
+    })
+    this.latestLedger = Math.max(this.latestLedger, ledger)
+    return id
   }
 
   /**

@@ -31,13 +31,16 @@ const collection = (...tokens: string[]) => json({ _embedded: { records: tokens.
 function client(replies: Reply[], options: Partial<ConstructorParameters<typeof HorizonClient>[0]> = {}) {
   const { fetch, urls } = fakeFetch(replies)
   const sleeps: number[] = []
+  let time = 0
   const horizon = new HorizonClient({
     url: 'https://horizon.example/prefix/',
     fetch,
     sleep: async (ms) => {
       sleeps.push(ms)
+      time += ms
     },
     random: () => 1,
+    now: () => time,
     ...options,
   })
   return { horizon, urls, sleeps }
@@ -147,6 +150,48 @@ describe('HorizonClient', () => {
     const { horizon, sleeps } = client([new Response('<html>gateway</html>', { status: 200 }), json({ ok: 1 })])
     await expect(horizon.get('/')).resolves.toEqual({ ok: 1 })
     expect(sleeps).toHaveLength(1)
+  })
+
+  it('paces calls after the burst at the configured rate', async () => {
+    const replies = Array.from({ length: 4 }, () => json({ ok: true }))
+    const { horizon, sleeps, urls } = client(replies, { rateLimit: { requestsPerSecond: 2, burst: 2 } })
+    for (let i = 0; i < 4; i++) await horizon.get('/')
+    expect(urls).toHaveLength(4)
+    // The first two spend the burst; the next two wait for a token at 2/s.
+    expect(sleeps).toEqual([500, 500])
+  })
+
+  it('takes a token for a retry as well as the first attempt', async () => {
+    const { horizon, sleeps, urls } = client(
+      [problem(429, 'rate_limit_exceeded'), json({ ok: true })],
+      { rateLimit: { requestsPerSecond: 1, burst: 1 }, backoffBaseMs: 100 },
+    )
+    await expect(horizon.get('/')).resolves.toEqual({ ok: true })
+    expect(urls).toHaveLength(2)
+    // 100ms of backoff refills a tenth of a token; the retry waits for the rest.
+    expect(sleeps).toEqual([100, 900])
+  })
+
+  it('shares one bucket between concurrent callers', async () => {
+    const { horizon, sleeps, urls } = client([json({ ok: 1 }), json({ ok: 2 })], {
+      rateLimit: { requestsPerSecond: 1, burst: 1 },
+    })
+    const replies = await Promise.all([horizon.get('/a'), horizon.get('/b')])
+    expect(replies).toEqual([{ ok: 1 }, { ok: 2 }])
+    expect(urls).toHaveLength(2)
+    // The second caller queues behind the first's token.
+    expect(sleeps).toEqual([1_000])
+  })
+
+  it('does not pace anything without a rate limit', async () => {
+    const { horizon, sleeps } = client([json({}), json({}), json({})])
+    for (let i = 0; i < 3; i++) await horizon.get('/')
+    expect(sleeps).toEqual([])
+  })
+
+  it('refuses an invalid rate limit', () => {
+    expect(() => client([], { rateLimit: { requestsPerSecond: 0, burst: 1 } })).toThrow(/positive/)
+    expect(() => client([], { rateLimit: { requestsPerSecond: 1, burst: 0 } })).toThrow(/whole number/)
   })
 
   it('falls back to the status text when an error body is not a problem document', async () => {

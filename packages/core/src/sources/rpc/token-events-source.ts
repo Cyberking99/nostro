@@ -21,7 +21,6 @@
  */
 
 import type { AssetId } from '../../money/asset.js'
-import { contractIdOf, isContractAsset } from '../../money/asset.js'
 import type { NewMovement } from '../../model/index.js'
 import { normalizeTokenEvents } from '../events/normalize.js'
 import type { RawContractEvent } from '../events/normalize.js'
@@ -90,7 +89,7 @@ export class RpcTokenEventsSource {
     const contractIds = activeTokens.map((t) => t.contractId).slice(0, 5)
 
     const result = await this.client.getEvents({
-      ...(cursor ? { cursor } : { startLedger }),
+      ...(cursor !== null ? { cursor } : startLedger !== undefined ? { startLedger } : {}),
       filters: [{ contractIds }],
       limit,
     })
@@ -116,9 +115,9 @@ export class RpcTokenEventsSource {
           decimals: token.decimals,
         })
         movements.push(...batch)
-      } catch {
+      } catch (err) {
         // Re-throw: unknown event shapes must not be silently dropped (#23).
-        throw
+        throw err
       }
     }
 

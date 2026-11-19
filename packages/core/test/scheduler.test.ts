@@ -19,7 +19,7 @@ function movement(account: string, token: string): NewMovement {
     tenantId: T,
     network: 'testnet',
     source: 'fake',
-    externalId: token,
+    externalId: `${account}:${token}`,
     account,
     direction: 'credit',
     kind: 'transfer',
@@ -120,7 +120,7 @@ describe('schedule', () => {
         name: 'fake',
         network: 'testnet',
         pull: async (req) => {
-          if (req.account === A) return bad.pull(req)
+          if (req.account === A) return bad.pull()
           return good.pull(req)
         },
       },
@@ -185,8 +185,14 @@ describe('schedule', () => {
 
   it('reports errors without stopping other streams', async () => {
     const store = new MemoryStore()
-    const source = new FakeSource({ [B]: ['1'] })
-    // A has no feed entry → FakeSource throws.
+    const good = new FakeSource({ [B]: ['1'] })
+    const bad = new ErrorSource(new Error('horizon 500'))
+    // A's source fails; B's still catches up.
+    const source: MovementSource = {
+      name: 'fake',
+      network: 'testnet',
+      pull: (req) => (req.account === A ? bad.pull() : good.pull(req)),
+    }
 
     const report = await schedule({ store, tenantId: T, sources: [source], accounts: [A, B] })
 

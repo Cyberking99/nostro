@@ -1,5 +1,5 @@
 import { HorizonClient, HorizonEffectsSource, HorizonFeesSource } from '@nostro-labs/nostro'
-import type { MigratableStore, MovementSource } from '@nostro-labs/nostro'
+import type { HorizonRateLimit, MigratableStore, MovementSource } from '@nostro-labs/nostro'
 import type { Args, Network, OptionSpec } from './args.js'
 import { database } from './args.js'
 import type { Io } from './io.js'
@@ -27,6 +27,9 @@ export const NETWORK_HELP = `  --account <G...>    An account to work on; repeat
   --network <name>    testnet, public, or another label with --horizon (env NOSTRO_NETWORK; default testnet)
   --horizon <url>     The Horizon to read (env NOSTRO_HORIZON_URL; default: the network's public one)`
 
+export const RATE_LIMIT_HELP = `  --rate-limit <n>    Pace Horizon at n requests/second with a shared token bucket (off by default)
+  --burst <n>         Requests allowed at once before pacing starts (default 1; needs --rate-limit)`
+
 /** Open the database, check its schema, run `fn`, and close it whatever happens. */
 export async function withStore<T>(args: Args, io: Io, fn: (store: MigratableStore) => Promise<T>): Promise<T> {
   const opened = await openStore(database(args, io), io, { create: false })
@@ -38,8 +41,12 @@ export async function withStore<T>(args: Args, io: Io, fn: (store: MigratableSto
   }
 }
 
-export function horizonClient(network: Network, io: Io): HorizonClient {
-  return new HorizonClient({ url: network.horizon, ...(io.fetch === undefined ? {} : { fetch: io.fetch }) })
+export function horizonClient(network: Network, io: Io, limit?: HorizonRateLimit): HorizonClient {
+  return new HorizonClient({
+    url: network.horizon,
+    ...(io.fetch === undefined ? {} : { fetch: io.fetch }),
+    ...(limit === undefined ? {} : { rateLimit: limit }),
+  })
 }
 
 /**

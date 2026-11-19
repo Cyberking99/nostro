@@ -109,6 +109,14 @@ export interface StoreReader extends JournalReader {
   listMovements(query: MovementQuery): Promise<Movement[]>
   getExpectation(tenantId: string, id: string): Promise<Expectation | null>
   getExpectationByReference(tenantId: string, reference: string): Promise<Expectation | null>
+  /**
+   * Find expectations indexed under a normalised reference key: the key is
+   * compared with both the normalised `reference` and the normalised requested
+   * text memo. Several expectations can share a key, so this returns a list.
+   * Settled and cancelled expectations are included; the caller decides what
+   * a match means. An empty key matches nothing.
+   */
+  getExpectationsByNormalizedReference(tenantId: string, key: string): Promise<Expectation[]>
   listExpectations(query: ExpectationQuery): Promise<Expectation[]>
   listAllocations(query: AllocationQuery): Promise<Allocation[]>
   getException(tenantId: string, id: string): Promise<ExceptionRecord | null>
