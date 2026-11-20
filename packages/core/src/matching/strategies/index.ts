@@ -8,9 +8,10 @@ import { memoIdStrategy } from './memo-id.js'
 import { memoNearMissStrategy } from './memo-near-miss.js'
 import { memoTextStrategy } from './memo-text.js'
 import { memoTruncatedStrategy } from './memo-truncated.js'
+import { multipleInvoicesStrategy } from './multiple-invoices.js'
 import { muxedIdStrategy } from './muxed-id.js'
 
-export { exactAmountStrategy, knownPayerStrategy, memoContainedStrategy, memoCrossTypeStrategy, memoHashStrategy, memoIdStrategy, memoNearMissStrategy, memoTextStrategy, memoTruncatedStrategy, muxedIdStrategy }
+export { exactAmountStrategy, knownPayerStrategy, memoContainedStrategy, memoCrossTypeStrategy, memoHashStrategy, memoIdStrategy, memoNearMissStrategy, memoTextStrategy, memoTruncatedStrategy, multipleInvoicesStrategy, muxedIdStrategy }
 
 /**
  * The default strategies, strongest first. The ordering and scores are
@@ -27,5 +28,6 @@ export const DEFAULT_STRATEGIES: readonly MatchStrategy[] = [
   memoTruncatedStrategy,
   exactAmountStrategy,
   memoNearMissStrategy,
+  multipleInvoicesStrategy,
   knownPayerStrategy,
 ]

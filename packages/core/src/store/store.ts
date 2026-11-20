@@ -276,6 +276,8 @@ export type ConstraintName =
   | 'amendment_below_allocated'
   | 'disposition_unsupported'
   | 'movement_not_open'
+  | 'no_allocation'
+  | 'already_reversed'
   | 'exception_not_open'
   | 'journal_unbalanced'
   | 'journal_posting_conflict'

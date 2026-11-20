@@ -312,7 +312,18 @@ export const MIGRATIONS: readonly ((s: string) => string)[] = [
     );
     CREATE INDEX IF NOT EXISTS expectation_reference_keys ON ${s}.expectation_reference_index (tenant_id, normalized);
   `,
-
+  // 6: allow negative allocations (reversals) per ADR 0003. Remove unique
+  // constraint to allow both positive and negative amounts on the same pair.
+  (s) => `
+    ALTER TABLE ${s}.allocations
+      DROP CONSTRAINT IF EXISTS allocations_unique,
+      DROP CONSTRAINT IF EXISTS allocations_amount_positive,
+      DROP CONSTRAINT IF EXISTS allocations_amount_check,
+      DROP CONSTRAINT IF EXISTS allocations_amount_nonzero,
+      ADD CONSTRAINT allocations_amount_nonzero CHECK (amount <> 0);
+  `,
+  // 7: extend exception and event codes, enforce one expiry exception per
+  // expectation, and refuse duplicate muxed ids on one account.
   (s) => `
     DO $do$
     DECLARE c text;
